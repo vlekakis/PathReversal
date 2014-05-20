@@ -1,9 +1,18 @@
 
 import argparse
 from sys import exit
+from time import sleep
 from NodeStatus import NodeStatus
+import zmq
+from multiprocessing import Process
+from FifoNode import fifoNetWorker
 
 Nodes = {}
+
+def ctrlVentilator(ctrlPort, cmdPort):
+   
+    exit(1)
+    
 
 def isLocalNode(ip):
     if ip == 'localhost':
@@ -13,7 +22,10 @@ def isLocalNode(ip):
     return False
 
 def establishLocalNode(node):
+    netWorker = Process(target=fifoNetWorker, args=(1,'localhost','5558', '', ''))
+    netWorker.start()
     print 'Node', node['ip'], node['port'],  'has been initiated'
+    
 
 def establishRemoteNode(node):
     print 'Node', node['ip'], node['port'],  'has been initiated'
@@ -61,9 +73,22 @@ def main():
     
     args = p.parse_args()
     
-    if args.nodes != None:
-        print 'Initiating nodes from file....', args.nodes
-        initiateNodes(args.nodes)
+    if args.nodes == None:
+        print 'Nodes file is not given...Program will exit'
+        exit(1)
+    
+    print 'Initiating nodes from file....', args.nodes
+    initiateNodes(args.nodes)
+    context = zmq.Context()
+    ctrlSock = context.socket(zmq.PUSH)
+    ctrlSock.bind("tcp://127.0.0.1:5558")
+    print 'Test'
+    sleep(1)
+    for msg in xrange(100):
+        ctrlSock.send(str(msg))
+        
+    
+    ctrlSock.send('EXIT')
     
 if __name__ == "__main__":
     main()
