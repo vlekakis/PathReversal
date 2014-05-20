@@ -1,27 +1,34 @@
 import zmq
 from sys import exit
+from sys import argv
 import logging
+import json
 
 
 
-def fifoNetWorker(netId, ctrlIp, ctrlPort, serverPort, name):
-    LOG_FILENAME = 'example.log'
+def fifoNetWorker(netName, ctrlAddress):
+    
+    logname = netName.replace(':', '_')+'.log'
+    LOG_FILENAME = logname
     logging.basicConfig(filename=LOG_FILENAME,level=logging.DEBUG)
+    
     context = zmq.Context()
     
-    netCtrlRxSock = context.socket(zmq.PULL)
-    netCtrlRxSock.connect('tcp://'+ctrlIp+':'+ctrlPort)
+    netCtrlRxSock = context.socket(zmq.SUB)
+    netCtrlRxSock.setsockopt(zmq.SUBSCRIBE, netName)
+    netCtrlRxSock.setsockopt(zmq.SUBSCRIBE, b'Exit')
+    netCtrlRxSock.connect(ctrlAddress)
+    
+    
     poller = zmq.Poller()
     poller.register(netCtrlRxSock, zmq.POLLIN)
     
     
     while True:
-        logging.debug('only polling')
         socks = dict(poller.poll())
         if socks.get(netCtrlRxSock) == zmq.POLLIN:
-            controlMsg = netCtrlRxSock.recv()
-            if controlMsg == 'EXIT':
-                logging.debug('Time to quit...')
+            msg = netCtrlRxSock.recv_string()
+            logging.debug("LocalName:\t"+netName+'\t message\t'+msg )
+            if msg == 'Exit':
                 exit(1)
-            logging.debug("Recvied: "+str(controlMsg))
-            
+

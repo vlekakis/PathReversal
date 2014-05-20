@@ -21,16 +21,16 @@ def isLocalNode(ip):
         return True
     return False
 
-def establishLocalNode(node):
-    netWorker = Process(target=fifoNetWorker, args=(1,'localhost','5558', '', ''))
+def establishLocalNode(nodeName, ctrlAddress):
+    netWorker = Process(target=fifoNetWorker, args=(nodeName, ctrlAddress))
     netWorker.start()
-    print 'Node', node['ip'], node['port'],  'has been initiated'
+    print 'Node', nodeName , 'initated'
     
 
 def establishRemoteNode(node):
     print 'Node', node['ip'], node['port'],  'has been initiated'
 
-def initiateNodes(filename):
+def initiateNodes(filename, ctrlAddress):
     
     fp = open(filename)
     for host in fp:
@@ -47,16 +47,16 @@ def initiateNodes(filename):
         Nodes[host]['ip'] = node[0]
         Nodes[host]['port'] = node[1]
         Nodes[host]['status'] = NodeStatus.DRIVER_PARSED
+        Nodes[host]['name'] = host
   
-    for n in Nodes.keys():
-        if Nodes[n]['status'] == NodeStatus.DRIVER_PARSED:
-            if isLocalNode(Nodes[n]['ip']) == True:
-                res = establishLocalNode(Nodes[n])
-            else:
-                res = establishRemoteNode(Nodes[n])
+        if isLocalNode(Nodes[host]['ip']) == True:
+            res = establishLocalNode(host, ctrlAddress)
+        
+        else:
+            print 'Remote node, not supported yet'
             
-            if res == 0:
-                Nodes[n]['status'] = NodeStatus.DRIVER_INITIALIZED
+        if res == 0:
+            Nodes[host]['status'] = NodeStatus.DRIVER_INITIALIZED
   
   
         
@@ -78,17 +78,31 @@ def main():
         exit(1)
     
     print 'Initiating nodes from file....', args.nodes
-    initiateNodes(args.nodes)
+    ctrlAddress = 'tcp://127.0.0.1:5558'
+    initiateNodes(args.nodes, ctrlAddress)
+    
+    
     context = zmq.Context()
-    ctrlSock = context.socket(zmq.PUSH)
-    ctrlSock.bind("tcp://127.0.0.1:5558")
+    ctrlSock = context.socket(zmq.PUB)
+    ctrlSock.bind(ctrlAddress)
     print 'Test'
     sleep(1)
     for msg in xrange(100):
-        ctrlSock.send(str(msg))
+        address = ''
+        if msg % 3 == 0:
+            address = 'localhost:5000'
+        elif msg % 3 == 1:
+            address = 'localhost:5001'
+        if msg % 3 == 2:
+            address = 'localhost:5002'
         
+        msg = address+'\t'+str(msg)
+        ctrlSock.send_string(msg)
     
-    ctrlSock.send('EXIT')
+    ctrlSock.send_string('Exit')
+    
+    exit(1)
+    
     
 if __name__ == "__main__":
     main()
