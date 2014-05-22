@@ -1,19 +1,19 @@
 
 import argparse
+import zmq
+import json
 from sys import exit
 from time import sleep
 from NodeStatus import NodeStatus
-import zmq
 from multiprocessing import Process
 from FifoNode import FifoNode
-import json
+from Queue import Queue, Empty
+ 
+from AgentSink import AgentSinkServer
+
 
 Nodes = {}
 
-def ctrlVentilator(ctrlPort, cmdPort):
-   
-    exit(1)
-    
 
 def isLocalNode(ip):
     if ip == 'localhost':
@@ -22,20 +22,21 @@ def isLocalNode(ip):
         return True
     return False
 
-def establishLocalNode(nodeName, ctrlAddress):
+def establishLocalNode(nodeName, pubAgentAddr, sinkAgentAddr):
     fifoNode = FifoNode()
-    netWorker = Process(target=fifoNode.runFifoNetWorker, args=(nodeName, ctrlAddress))
+    netWorker = Process(target=fifoNode.runFifoNetWorker, 
+                        args=(nodeName, pubAgentAddr, sinkAgentAddr))
     netWorker.start()
-    print 'Node', nodeName , 'initated'
+    print 'Node', nodeName , 'initiated'
     return netWorker
     
 
 def establishRemoteNode(node):
     print 'Node', node['ip'], node['port'],  'has been initiated'
 
-def initiateNodes(filename, ctrlAddress):
+def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     
-    workers = []
+    peersProc = []
     fp = open(filename)
     for host in fp:
         print host
@@ -52,28 +53,46 @@ def initiateNodes(filename, ctrlAddress):
         Nodes[host]['ip'] = node[0]
         Nodes[host]['port'] = node[1]
         Nodes[host]['status'] = NodeStatus.DRIVER_PARSED
-        Nodes[host]['name'] = "tcp://"+host
+        Nodes[host]['name'] = host
   
         if isLocalNode(Nodes[host]['ip']) == True:
-            res = establishLocalNode(host, ctrlAddress)
+            res = establishLocalNode(host, pubAgentAddr, sinkAgentAddr)
             Nodes[host]['status'] = NodeStatus.DRIVER_INITIALIZED
-            workers.append(res)
+            peersProc.append(res)
         else:
             print 'Remote node, not supported yet'
             
-    return workers
+    return peersProc
             
         
   
-def testServerNodes(context):
-    sock = context.socket(zmq.REQ)
+def testBidirectionalChannel(sock, msgQ):
+    
+    mCheck=0
     for k in Nodes.keys():
-        sock.connect(Nodes[k]['name'])
-        sock.send_string("Test")
-        print "AFTER SEND"
-        msg = sock.recv_string()
-        print 'Node' , k, 'replied' , msg
+        msg = (Nodes[k]['name'], 'Test')
+        sock.send_multipart(msg)
         
+    while True:
+        try:
+            while msgQ.empty() == False:
+                msg = msgQ.get(False)
+                Nodes[msg[0]]['status'] = NodeStatus.DRIVER_FUNCTIONAL
+
+                mCheck+=1
+                msgQ.task_done()
+                if mCheck==len(Nodes.keys()):
+                    print 'Received all ACK messages'
+                    return
+                    
+        except Empty:
+            if mCheck == 3:
+                break
+            else:
+                print 'Exception'
+                continue
+             
+            
   
         
 def main():
@@ -93,22 +112,38 @@ def main():
         print 'Nodes file is not given...Program will exit'
         exit(1)
     
-    print 'Initiating nodes from file....', args.nodes
-    ctrlAddress = 'tcp://127.0.0.1:5558'
-    w = initiateNodes(args.nodes, ctrlAddress)
+    sinkSockBindAddr = "tcp://*:9090"
+    pubSockBindAddr = "tcp://*:5558" 
+    sinkAddr = "tcp://127.0.0.1:9090"
+    pubAgentBindAddress = 'tcp://127.0.0.1:5558'
     
     
     context = zmq.Context()
-    ctrlSock = context.socket(zmq.PUB)
-    ctrlSock.bind(ctrlAddress)
-    print 'Test'
-    sleep(1)
-     
-#     serverPort = json.dumps({'server':'5000'})
-#     ctrlSock.send_multipart(['localhost:5000', serverPort ])
-    #testServerNodes(context)    
-    ctrlSock.send_string('Exit')
+    print 'Creating PeerSink server...'
+    peerQueue = Queue(10)
+    sinkSock = context.socket(zmq.PULL)
     
+    sinkServer = AgentSinkServer(peerQueue, sinkSock, sinkSockBindAddr)
+    sinkServer.start()
+    
+    print 'Initiating nodes from file....', args.nodes
+    initiateNodes(args.nodes, pubAgentBindAddress, sinkAddr)
+    
+    
+    print 'Creating pub-Agent socket'
+    ctrlSock = context.socket(zmq.PUB)
+    ctrlSock.bind(pubSockBindAddr)
+    print 'Waiting for  setup to finish'
+    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
+    sleep(1)
+    
+    print 'Test Nodes Communication channel with the Agent'
+    testBidirectionalChannel(ctrlSock, peerQueue)
+    print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'    
+    
+    ctrlSock.send_string('Exit')
+    sinkServer.join()
+    peerQueue.join()
     exit(1)
     
     

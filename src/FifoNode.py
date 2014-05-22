@@ -8,9 +8,9 @@ import json
 
 from time import sleep
 
-NodeIloop = None
 
-logging.basicConfig(filename="process.cmd",level=logging.DEBUG)
+
+
 class FifoStats(object):
     
     def __init__(self):
@@ -27,28 +27,47 @@ class FifoNode(object):
         self.fifoStats = FifoStats()
         self.nodeIloop = ioloop.IOLoop.instance()
 
-    def processCmd(self, stream , msg):
-    
+    def processAgentCmd(self, stream, msg):
+        
+        logging.debug("\tIncoming msg\t"+str(msg))
         if msg[0] == 'Exit':
             logging.debug("Received exit")
             stream.stop_on_recv()
             self.nodeIloop.stop()
         
-        logging.debug("Exiting process cmd")
+        
+        if len(msg) > 1 and msg[1] == 'Test':
+            logging.debug('Received Test from Agent')
+            self.streamCmdOut.send_multipart([self.name, 'ACK'])
+        
+        logging.debug("Exiting process Command")
         return
         
     
-    def runFifoNetWorker(self, netName, ctrlAddress):
+    def runFifoNetWorker(self, netName, pubAgentAddr, sinkAgentAddr):
     
+        logFname = netName.replace(":", "_")
+        logging.basicConfig(filename=logFname,level=logging.DEBUG)
+        
+        self.name = netName
+        self.pubAgent = pubAgentAddr
+        self.sinkAgent = sinkAgentAddr
     
-        context = zmq.Context()
-        netCtrlRxSock = context.socket(zmq.SUB)
-        netCtrlRxSock.setsockopt(zmq.SUBSCRIBE, netName)
-        netCtrlRxSock.setsockopt(zmq.SUBSCRIBE, b'Exit')
-        netCtrlRxSock.connect(ctrlAddress)
-        streamCtrl = zmqstream.ZMQStream(netCtrlRxSock)
-    
-        streamCtrl.on_recv_stream(self.processCmd)
+        logging.debug("Creating SubAgent socket")
+        self.context = zmq.Context()
+        self.cmdSubSock = self.context.socket(zmq.SUB)
+        self.cmdSubSock.setsockopt(zmq.SUBSCRIBE, netName)
+        self.cmdSubSock.setsockopt(zmq.SUBSCRIBE, b'Exit')
+        self.cmdSubSock.connect(self.pubAgent)
+        self.streamCmdIn = zmqstream.ZMQStream(self.cmdSubSock)
+        self.streamCmdIn.on_recv_stream(self.processAgentCmd)
+        
+        
+        logging.debug("Creating PUSH-to-Agent socket")
+        self.cmdPushSock = self.context.socket(zmq.PUSH)
+        self.cmdPushSock.connect(self.sinkAgent)
+        self.streamCmdOut = zmqstream.ZMQStream(self.cmdPushSock)
+        #self.streamCmdOut.on_send ???
         self.nodeIloop.start()
         
     
