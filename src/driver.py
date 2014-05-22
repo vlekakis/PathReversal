@@ -22,10 +22,10 @@ def isLocalNode(ip):
         return True
     return False
 
-def establishLocalNode(nodeName, pubAgentAddr, sinkAgentAddr):
+def establishLocalNode(nodeName, pubAgentAddr, sinkAgentAddr, neighbor):
     fifoNode = FifoNode()
     netWorker = Process(target=fifoNode.runFifoNetWorker, 
-                        args=(nodeName, pubAgentAddr, sinkAgentAddr))
+                        args=(nodeName, pubAgentAddr, sinkAgentAddr, neighbor))
     netWorker.start()
     print 'Node', nodeName , 'initiated'
     return netWorker
@@ -36,7 +36,7 @@ def establishRemoteNode(node):
 
 def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     
-    peersProc = []
+    peersHosts = []
     fp = open(filename)
     for host in fp:
         print host
@@ -54,15 +54,18 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
         Nodes[host]['port'] = node[1]
         Nodes[host]['status'] = NodeStatus.DRIVER_PARSED
         Nodes[host]['name'] = host
-  
-        if isLocalNode(Nodes[host]['ip']) == True:
-            res = establishLocalNode(host, pubAgentAddr, sinkAgentAddr)
+        peersHosts.append(host)
+    
+    for h in peersHosts:
+        neighbor = peersHosts[(peersHosts.index(h)+1)%len(peersHosts)]
+        if isLocalNode(Nodes[h]['ip']) == True:
+            res = establishLocalNode(h, pubAgentAddr, sinkAgentAddr, neighbor)
             Nodes[host]['status'] = NodeStatus.DRIVER_INITIALIZED
-            peersProc.append(res)
+            
         else:
             print 'Remote node, not supported yet'
             
-    return peersProc
+    
             
         
   
@@ -141,7 +144,22 @@ def main():
     testBidirectionalChannel(ctrlSock, peerQueue)
     print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'    
     
+    
+    print 'Establish connections with the Neighbors'
+    ctrlSock.send_string('ConnectToNeighbor')
+    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
+    
+    sleep(1)
+    
+    print 'Test peer connection with their Neighbors'
+    ctrlSock.send_string('TestConnectionToNeighbor')
+    print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
+    
+    
+    sleep(2)
+    print 'Exiting'
     ctrlSock.send_string('Exit')
+    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
     sinkServer.join()
     peerQueue.join()
     exit(1)
