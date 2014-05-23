@@ -1,13 +1,11 @@
 import zmq
-from zmq.eventloop import ioloop
-from zmq.eventloop import zmqstream
-from sys import exit
-from sys import argv
 import logging
 import json
-
-from time import sleep
-
+from zmq.eventloop import ioloop
+from zmq.eventloop import zmqstream
+from Message import MsgType
+from Message import MsgFactory
+from copy import deepcopy
 
 
 
@@ -23,22 +21,59 @@ class FifoStats(object):
 class FifoNode(object):
     
     def __init__(self):
-        ioloop.install()
-        self.fifoStats = FifoStats()
-        self.nodeIloop = ioloop.IOLoop.instance()
+        self.fifoStats = None
+        self.nodeIloop = None
 
     def procPeerServerMsg(self, stream, msg):
         logging.debug("Received message...")
         
-        if len(msg) > 1 and msg[1] == 'Hello':
-            logging.debug('Sending ACK to a Hello message')
-            stream.send_multipart([msg[0], 'ACK'])
+        if len(msg) > 1:
+            msgIncoming = json.loads(msg[1])
+            
+            if msgIncoming[MsgType.TYPE] == MsgType.KEEP_ALIVE:
+                logging.debug('Received KEEP_ALIVE message from:\t'+str(msg[0]))
+                logging.debug('Sending a KEEP_ALIVE_ACK message to:\t'+str(msg[0]))
+                msgOut = MsgFactory.create(MsgType.KEEP_ALIVE_ACK)
+                stream.send_multipart([self.name, msgOut])
+        
+            if msgIncoming[MsgType.TYPE] == MsgType.DATA_MSG:
+                
+                logging.debug('Received DATA_MSG message from:\t'+str(msg[0]))
+                dataId = msgIncoming[MsgType.DATA_ID]
+                msgOutDatAck = MsgFactory.create(MsgType.DATA_ACK, None, None, dataId)
+                logging.debug('Sending DATA_ACK message to:\t'+str(msg[0]))
+                stream.send_multipart(self.name, msgOutDatAck)
+                
+                if msgIncoming[MsgType.DST] == self.name:
+                    
+                    self.dataObject = deepcopy(msgIncoming[MsgType.DATA])
+                    self.dataObjectId = msgIncoming[MsgType.DATA_ID]
+                    logging.debug('DATA_MSG destination reached with id:'+
+                                  str(self.dataObjectId))
+                    logging.debug('Sending DATA_ACK to Agent')
+                    self.streamCmdOut.send_multipart([self.name, msgOutDatAck])
+                
+                else:
+                    logging.debug("Incoming DATA_MSG needs forwarding")
+                    logging.debug("Forwarding DATA_MSG("+str(dataId)+") to neighbor:\t"+
+                                  str(self.neighbor))
+                    self.peerCltStream.send_multipart([self.name, msg[1]])
+                    
+        
     
     def procPeerClientMsg(self, msg):
         
-        if len(msg) > 1 and msg[1] == 'ACK':
-            logging.debug("Received ACK for the Hello Message")
-
+        if len(msg) > 1:
+            msgIncoming = json.loads(msg[1])
+            
+            if msgIncoming[MsgType.Type] == MsgType.KEEP_ALIVE_ACK:
+                logging.debug("Received KEEP_ALIVE_ACK from:\t"+str(msg[0]))
+                    
+            if msgIncoming[MsgType.Type] == MsgType.DATA_ACK:
+                logging.debug("Received DATA_MSG_ACK from:\t"+
+                            str(msg[1])+"\t for:\t"+str(msgIncoming[MsgType.DATA_ID]))
+            
+        
     def procAgentCmd(self, stream, msg):
         
         logging.debug("\tIncoming msg\t"+str(msg))
@@ -56,15 +91,30 @@ class FifoNode(object):
        
         if  msg[0] == 'TestConnectionToNeighbor':
             logging.debug('TestConnection With the Peer-Neighbor')
-            self.peerSockClt.send_multipart([self.name, 'Hello'])
-    
-       
+            msgOut = MsgFactory.create(MsgType.KEEP_ALIVE,
+                                       self.neighbor)
+            self.peerSockClt.send_multipart([self.name, msgOut])   
         
-        if len(msg) > 1 and msg[1] == 'Test':
-            logging.debug('Received Test from Agent')
-            self.streamCmdOut.send_multipart([self.name, 'ACK'])
         
-       
+        if len(msg) > 1:
+            msgIncoming = json.loads(msg[1])
+            
+            if msgIncoming[MsgType.TYPE] == MsgType.AGENT_TEST_MSG:
+                logging.debug('Received Test from Agent')
+                msgOut = MsgFactory.create(MsgType.AGENT_TETS_ACK)
+                self.streamCmdOut.send_multipart([self.name, msgOut])
+                
+            elif msgIncoming[MsgType.TYPE] == MsgType.DATA_MSG:
+                logging.debug('Received Data Message from Agent with ID:\t'+
+                              str(msgIncoming[MsgType.DATA_ID]))
+                
+                if msgIncoming[MsgType.DST] == self.name:
+                    msgOut = MsgFactory.create(MsgType.DATA_ACK)
+                    self.streamCmdOut.send_multipart([self.name, msgOut])
+                else:
+                    msgOut = [self.name, msg[1]]
+                    self.peerSockClt.send_multipart(msgOut)
+        
         
         
         logging.debug("Exiting process Command")
@@ -73,7 +123,12 @@ class FifoNode(object):
     
     def runFifoNetWorker(self, netName, pubAgentAddr, sinkAgentAddr, neighbor):
     
+        ioloop.install()
+        self.nodeIloop = ioloop.IOLoop.instance()
+        self.fifoStats = FifoStats()
+        
         logFname = netName.replace(":", "_")
+        logFname = "logs/"+logFname
         logging.basicConfig(filename=logFname,level=logging.DEBUG)
         
         self.name = netName

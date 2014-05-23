@@ -1,14 +1,14 @@
 
 import argparse
 import zmq
-import json
 from sys import exit
 from time import sleep
 from NodeStatus import NodeStatus
+from Message import MsgType
+from Message import MsgFactory
 from multiprocessing import Process
 from FifoNode import FifoNode
 from Queue import Queue, Empty
- 
 from AgentSink import AgentSinkServer
 
 
@@ -64,16 +64,22 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
             
         else:
             print 'Remote node, not supported yet'
-            
+    return peersHosts   
+
     
-            
+def moveData(entranceNode, dest, data, sock):
+    packet = MsgFactory.create(MsgType.DATA_MSG, dest, data, None)
+    netMsg = [entranceNode, packet]
+    sock.send_multipart(netMsg)
+               
         
   
 def testBidirectionalChannel(sock, msgQ):
     
     mCheck=0
+    packet = MsgFactory.create(MsgType.AGENT_TEST_MSG)
     for k in Nodes.keys():
-        msg = (Nodes[k]['name'], 'Test')
+        msg = (Nodes[k]['name'], packet)
         sock.send_multipart(msg)
         
     while True:
@@ -130,7 +136,7 @@ def main():
     sinkServer.start()
     
     print 'Initiating nodes from file....', args.nodes
-    initiateNodes(args.nodes, pubAgentBindAddress, sinkAddr)
+    peerHosts = initiateNodes(args.nodes, pubAgentBindAddress, sinkAddr)
     
     
     print 'Creating pub-Agent socket'
@@ -154,6 +160,10 @@ def main():
     print 'Test peer connection with their Neighbors'
     ctrlSock.send_string('TestConnectionToNeighbor')
     print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
+    
+    
+    
+    moveData(peerHosts[0], peerHosts[0], "DataTest")
     
     
     sleep(2)
