@@ -1,4 +1,5 @@
-from json import loads
+from json import dumps
+from hashlib import md5
 
 class MsgType(object):
     TYPE = 'type'
@@ -25,5 +26,11 @@ class MsgFactory(object):
         msg[MsgType.DATA] = data
         msg[MsgType.DATA_ID] = dataId
         msg[MsgType.SOURCE] = src
-        msg = loads(msg)
+        msg = dumps(msg)
         return msg
+    
+    @staticmethod
+    def generateMessageId(data):
+        dig = md5()
+        dig.update(str(data))
+        return dig.hexdigest() 

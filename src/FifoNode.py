@@ -66,10 +66,10 @@ class FifoNode(object):
         if len(msg) > 1:
             msgIncoming = json.loads(msg[1])
             
-            if msgIncoming[MsgType.Type] == MsgType.KEEP_ALIVE_ACK:
+            if msgIncoming[MsgType.TYPE] == MsgType.KEEP_ALIVE_ACK:
                 logging.debug("Received KEEP_ALIVE_ACK from:\t"+str(msg[0]))
                     
-            if msgIncoming[MsgType.Type] == MsgType.DATA_ACK:
+            if msgIncoming[MsgType.TYPE] == MsgType.DATA_ACK:
                 logging.debug("Received DATA_MSG_ACK from:\t"+
                             str(msg[1])+"\t for:\t"+str(msgIncoming[MsgType.DATA_ID]))
             

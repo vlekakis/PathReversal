@@ -10,6 +10,8 @@ from multiprocessing import Process
 from FifoNode import FifoNode
 from Queue import Queue, Empty
 from AgentSink import AgentSinkServer
+from shutil import rmtree
+from os import mkdir
 
 
 Nodes = {}
@@ -67,8 +69,9 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     return peersHosts   
 
     
-def moveData(entranceNode, dest, data, sock):
-    packet = MsgFactory.create(MsgType.DATA_MSG, dest, data, None)
+def moveData(entranceNode, dest, data, dataId, sock):
+    
+    packet = MsgFactory.create(MsgType.DATA_MSG, dest, data, dataId)
     netMsg = [entranceNode, packet]
     sock.send_multipart(netMsg)
                
@@ -115,6 +118,12 @@ def main():
     p.add_argument('-k', dest='keyboard', action='store_true', default=False,
                    help='Keyboard driven run of the system')
     
+    p.add_argument('-l', dest='logDirectory', action='store', default='logs',
+                   help='Location of the peer log files')
+    
+    p.add_argument('-c', dest='cleanLogs', action='store_true', default=False,
+                   help='Decide to empty the log files')
+    
     args = p.parse_args()
     
     if args.nodes == None:
@@ -126,6 +135,10 @@ def main():
     sinkAddr = "tcp://127.0.0.1:9090"
     pubAgentBindAddress = 'tcp://127.0.0.1:5558'
     
+    
+    if args.cleanLogs == True:
+        rmtree(args.logDirectory, ignore_errors=True)
+        mkdir('logs')
     
     context = zmq.Context()
     print 'Creating PeerSink server...'
@@ -162,8 +175,9 @@ def main():
     print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
     
     
-    
-    moveData(peerHosts[0], peerHosts[0], "DataTest")
+    dataTest = "DataTest"
+    dataId = MsgFactory.generateMessageId(dataTest)
+    moveData(peerHosts[0], peerHosts[0], dataTest, dataId, ctrlSock)
     
     
     sleep(2)
