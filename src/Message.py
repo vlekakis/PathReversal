@@ -15,6 +15,8 @@ class MsgType(object):
     SOURCE =  7
     KEEP_ALIVE=8
     KEEP_ALIVE_ACK=9
+    DATA_MOVE_MSG=10
+    DATA_NACK=11
 
 class MsgFactory(object):
     

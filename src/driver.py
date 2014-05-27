@@ -12,6 +12,7 @@ from Queue import Queue, Empty
 from AgentSink import AgentSinkServer
 from shutil import rmtree
 from os import mkdir
+from json import loads
 
 
 Nodes = {}
@@ -69,20 +70,50 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     return peersHosts   
 
     
-def moveData(entranceNode, dest, data, dataId, sock):
+def moveData(entranceNode, dest, data, dataId, sock, msgtype):
     
-    packet = MsgFactory.create(MsgType.DATA_MSG, dest, data, dataId)
+    packet = MsgFactory.create(msgtype, dest, data, dataId)
     netMsg = [entranceNode, packet]
     sock.send_multipart(netMsg)
-               
         
+       
   
+def verifyDataMovement(entranceNode, dest, data, sock, msgQ, dataId=None):
+    
+    if dataId == None:
+        dataId = MsgFactory.generateMessageId(data)
+        moveData(entranceNode, dest, data, dataId, sock, MsgType.DATA_MSG)
+    elif dataId != None:
+        moveData(entranceNode, dest, data, dataId, sock, MsgType.DATA_MOVE_MSG)
+    
+    while True:
+        try:
+            while msgQ.empty() == False:
+                msg = msgQ.get(False)
+                assert len(msg) == 2
+                msgIn = loads(msg[1])
+                if msgIn[MsgType.TYPE] == MsgType.DATA_ACK and \
+                    msg[0] == dest and msgIn[MsgType.DATA_ID] == dataId:
+                    msgQ.task_done()
+                    print "Message with id", dataId, " arrived to dest", dest
+                    return
+                if msgIn[MsgType.TYPE] == MsgType.DATA_NACK \
+                     and msgIn[MsgType.DATA_ID] == dataId:
+                    msgQ.task_done()
+                    print "Message with id", dataId, " was not in the dest", msg[0]
+                    return 
+        except Empty:
+            continue
+                
+                    
+                
+
 def testBidirectionalChannel(sock, msgQ):
     
     mCheck=0
     packet = MsgFactory.create(MsgType.AGENT_TEST_MSG)
     for k in Nodes.keys():
-        msg = (Nodes[k]['name'], packet)
+        msg = [Nodes[k]['name'], packet]
         sock.send_multipart(msg)
         
     while True:
@@ -157,7 +188,7 @@ def main():
     ctrlSock.bind(pubSockBindAddr)
     print 'Waiting for  setup to finish'
     print '# # # # # # # # # # #  # # # # # # #  # # # # #'
-    sleep(1)
+    sleep(10)
     
     print 'Test Nodes Communication channel with the Agent'
     testBidirectionalChannel(ctrlSock, peerQueue)
@@ -170,17 +201,47 @@ def main():
     
     sleep(1)
     
-    print 'Test peer connection with their Neighbors'
-    ctrlSock.send_string('TestConnectionToNeighbor')
-    print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
+    if len(peerHosts) > 1:
+        print 'Test peer connection with their Neighbors'
+        ctrlSock.send_string('TestConnectionToNeighbor')
+        print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
+  
+    sleep(5)
     
-    
-    dataTest = "DataTest"
-    dataId = MsgFactory.generateMessageId(dataTest)
-    moveData(peerHosts[0], peerHosts[0], dataTest, dataId, ctrlSock)
-    
-    
+    print 'Data Testing: Entrance-Entrance case'
+    dataTest = "Entrance-Entrance"
+    verifyDataMovement(peerHosts[0], peerHosts[0], dataTest, ctrlSock, peerQueue)
+    print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
     sleep(2)
+     
+    print 'Data Testing: Entrance 1-hop case'
+    dataTest = "1-hop"
+    verifyDataMovement(peerHosts[0], peerHosts[1], dataTest, ctrlSock, peerQueue)
+    print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
+    sleep(4)
+    
+    
+    print 'Data Testing: Entrance 2-hop case'
+    dataTest = "2-hop"
+    verifyDataMovement(peerHosts[0], peerHosts[5], dataTest, ctrlSock, peerQueue)
+    print " % %  % % % %  % % % % % % % %  % % % % % % % % % % % %"
+    
+    print 'Move Existing message around-Success'
+    existingDid = MsgFactory.generateMessageId(dataTest)
+    verifyDataMovement(peerHosts[5], peerHosts[7], 
+                       None, ctrlSock, peerQueue, existingDid)
+    print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
+    
+    
+    print 'Move Existing message around-Fail'
+    existingDid = MsgFactory.generateMessageId("notExistingData")
+    verifyDataMovement(peerHosts[4], peerHosts[7], 
+                       None, ctrlSock, peerQueue, existingDid)
+    print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
+    
+    
+    
+    
     print 'Exiting'
     ctrlSock.send_string('Exit')
     print '# # # # # # # # # # #  # # # # # # #  # # # # #'
