@@ -1,6 +1,7 @@
 import zmq
 import logging
 import json
+import pickle
 from zmq.eventloop import ioloop
 from zmq.eventloop import zmqstream
 from Message import MsgType
@@ -16,6 +17,10 @@ class FifoStats(object):
         self.n = 0
         self.conStatus = {}
         
+    def repr(self):
+        print self.tx
+        print self.rx
+        
 
 class FifoNode(object):
     
@@ -23,15 +28,37 @@ class FifoNode(object):
         self.fifoStats = None
         self.nodeIloop = None
 
-    def peerServerReplying(self, stream, msg, status):
+    def getDest(self, msg):
+        m = json.loads(msg[1])
+        return m[MsgType.DST]
+
+        
+        
+    def updateFifoStats(self, dest, msg, tx=False, rx=False):
+        key = repr((self.name, dest))
+        if tx == True:
+            if key not in self.fifoStats.tx.keys():
+                self.fifoStats.tx[key] = []
+            self.fifoStats.tx[key].append(msg)
+        elif rx == True:
+            if key not in self.fifoStats.rx.keys():
+                self.fifoStats.rx[key] = []
+            self.fifoStats.rx[key].append(msg)
+            
+
+    def procPeerTxServerMsg(self, stream, msg, status):
         logging.debug("\tPeerServerReplying to: "+str(msg[0]))
         logging.debug(str(msg))
+        dst = self.getDest(msg)
+        self.updateFifoStats(dst, msg, tx=True)
 
-    def procPeerServerMsg(self, stream, msg):
+    def procPeerRxServerMsg(self, stream, msg):
         logging.debug("\tReceived message...")
         
         if len(msg) > 1:
             msgIncoming = json.loads(msg[1])
+
+            
             
             if msgIncoming[MsgType.TYPE] == MsgType.KEEP_ALIVE:
                 logging.debug('\tReceived KEEP_ALIVE message from:\t'+str(msg[0]))
@@ -41,23 +68,17 @@ class FifoNode(object):
                     stream.send_multipart([self.name, msgOut])
                 except TypeError as e:
                     logging.debug(e.message())
-            if msgIncoming[MsgType.TYPE] == MsgType.DATA_MSG:
-                
-                
+
+            if msgIncoming[MsgType.TYPE] == MsgType.DATA_MSG:    
                 did = msgIncoming[MsgType.DATA_ID]
                 logging.debug('\tReceived DATA_MSG message from:\t'+str(msg[0])+
                               " with id\t"+did)
                 msgOut = MsgFactory.create(MsgType.DATA_ACK, None, None, did, None)
                 logging.debug('\tSending DATA_ACK message to:\t'+str(msg[0]))
-                if stream.closed():
-                    logging.debug("STREAM CLOSED")
-                try:
-                    stream.send_multipart([self.name, msgOut])
-                except ValueError as e:
-                    logging.debug(e.message)
-                
-                if msgIncoming[MsgType.DST] == self.name:
-                    
+                stream.send_multipart([self.name, msgOut])
+               
+            
+                if msgIncoming[MsgType.DST] == self.name:    
                     self.dataObject = deepcopy(msgIncoming[MsgType.DATA])
                     self.dataObjectId = msgIncoming[MsgType.DATA_ID]
                     logging.debug('\tDATA_MSG destination reached with id:'+
@@ -72,11 +93,16 @@ class FifoNode(object):
                                   str(self.neighbor))
                     self.peerCltStream.send_multipart([self.name, msg[1]])
                     
+                    
+    def procPeerTxClientMsg(self, msg, status):
+        dst = self.getDest(msg)
+        self.updateFifoStats(dst, msg, tx=True)
     
-    def procPeerClientMsg(self, msg):
+    def procPeerRxClientMsg(self, msg):
         
         if len(msg) > 1:
             msgIncoming = json.loads(msg[1])
+            self.updateFifoStats(msg[0], msg, rx=True)
             
             if msgIncoming[MsgType.TYPE] == MsgType.KEEP_ALIVE_ACK:
                 logging.debug("\tReceived KEEP_ALIVE_ACK from:\t"+str(msg[0]))
@@ -125,7 +151,8 @@ class FifoNode(object):
             self.peerSockClt = self.context.socket(zmq.REQ)
             self.peerSockClt.connect(self.neighborAddr)
             self.peerCltStream = zmqstream.ZMQStream(self.peerSockClt)
-            self.peerCltStream.on_recv(self.procPeerClientMsg)
+            self.peerCltStream.on_recv(self.procPeerRxClientMsg)
+            self.peerCltStream.on_send(self.procPeerTxClientMsg)
        
         if  msg[0] == 'TestConnectionToNeighbor':
             logging.debug('\tTestConnection With the Peer-Neighbor')
@@ -142,7 +169,7 @@ class FifoNode(object):
                 msgOut = MsgFactory.create(MsgType.AGENT_TETS_ACK)
                 self.streamCmdOut.send_multipart([self.name, msgOut])
             
-            if msgIncoming[MsgType.TYPE] == MsgType.DATA_MOVE_MSG:
+            elif msgIncoming[MsgType.TYPE] == MsgType.DATA_MOVE_MSG:
                 logging.debug("Received DATA_MOVE_MSG request")
                 if self.dataObjectId == msgIncoming[MsgType.DATA_ID]:
                     self.ackOrForward(msgIncoming, caseExisting=True)
@@ -153,6 +180,10 @@ class FifoNode(object):
                 logging.debug('\tReceived Data Message from Agent with ID:\t'+
                               str(msgIncoming[MsgType.DATA_ID]))
                 self.ackOrForward(msgIncoming, caseExisting=False)
+            
+            elif msgIncoming[MsgType.TYPE] == MsgType.FIFO_STATS_QUERY:
+                logging.debug("\tReceived FIFO-query-stats message from agent")
+                self.streamCmdOut.send_multipart([self.name, pickle.dumps(self.fifoStats)])
         
         
         logging.debug("\tExiting process Command")
@@ -201,8 +232,8 @@ class FifoNode(object):
         localbindAddr = "tcp://*:"+netName.split(':')[1]
         self.peerSockServ.bind(localbindAddr)
         self.peerServStream = zmqstream.ZMQStream(self.peerSockServ)
-        self.peerServStream.on_recv_stream(self.procPeerServerMsg)
-        self.peerServStream.on_send_stream(self.peerServerReplying)
+        self.peerServStream.on_recv_stream(self.procPeerRxServerMsg)
+        self.peerServStream.on_send_stream(self.procPeerTxServerMsg)
         
         
         self.nodeIloop.start()

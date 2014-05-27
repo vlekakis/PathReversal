@@ -17,6 +17,7 @@ class MsgType(object):
     KEEP_ALIVE_ACK=9
     DATA_MOVE_MSG=10
     DATA_NACK=11
+    FIFO_STATS_QUERY=12
 
 class MsgFactory(object):
     

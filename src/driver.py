@@ -1,6 +1,7 @@
 
 import argparse
 import zmq
+import pickle
 from sys import exit
 from time import sleep
 from NodeStatus import NodeStatus
@@ -13,6 +14,7 @@ from AgentSink import AgentSinkServer
 from shutil import rmtree
 from os import mkdir
 from json import loads
+
 
 
 Nodes = {}
@@ -70,12 +72,28 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     return peersHosts   
 
     
-def moveData(entranceNode, dest, data, dataId, sock, msgtype):
+def moveData(entranceNode, dest, data=None, dataId=None, sock=None, msgtype=None):
     
     packet = MsgFactory.create(msgtype, dest, data, dataId)
     netMsg = [entranceNode, packet]
     sock.send_multipart(netMsg)
         
+
+def queryNodeFifoStats(host, sck, msgQ): 
+    moveData(host, host, sock=sck, msgtype=MsgType.FIFO_STATS_QUERY)
+    while True:
+        try:
+            while msgQ.empty() == False:
+                msg = msgQ.get(False)
+                assert len(msg) == 2
+                msgIn = pickle.loads(msg[1])
+                print msgIn.tx
+                print msgIn.rx
+                msgQ.task_done()
+                return
+        except Empty:
+            continue
+                
        
   
 def verifyDataMovement(entranceNode, dest, data, sock, msgQ, dataId=None):
@@ -136,7 +154,8 @@ def testBidirectionalChannel(sock, msgQ):
                 continue
              
             
-  
+
+ 
         
 def main():
     
@@ -240,7 +259,9 @@ def main():
     print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
     
     
-    
+    print 'Query Fifo-stats on node'
+    queryNodeFifoStats(peerHosts[3], ctrlSock, peerQueue)
+    print "# # # # # # # #  # # # # # # # # ## # ## # # # # "
     
     print 'Exiting'
     ctrlSock.send_string('Exit')
