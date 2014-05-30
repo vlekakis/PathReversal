@@ -13,11 +13,13 @@ class MsgType(object):
     AGENT_TEST_MSG = 5
     AGENT_TETS_ACK = 6
     SOURCE =  7
-    KEEP_ALIVE=8
-    KEEP_ALIVE_ACK=9
-    DATA_MOVE_MSG=10
-    DATA_NACK=11
-    FIFO_STATS_QUERY=12
+    KEEP_ALIVE = 8
+    KEEP_ALIVE_ACK = 9
+    DATA_MOVE_MSG = 10
+    DATA_NACK = 11
+    FIFO_STATS_QUERY = 12
+    PR_REQ = 13
+    PR_OBJ = 14
 
 class MsgFactory(object):
     
