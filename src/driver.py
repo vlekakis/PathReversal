@@ -14,6 +14,7 @@ from AgentSink import AgentSinkServer
 from shutil import rmtree
 from os import mkdir
 from json import loads
+from random import choice
 
 
 
@@ -153,9 +154,60 @@ def testBidirectionalChannel(sock, msgQ):
                 print 'Exception'
                 continue
              
-            
-
  
+def buildScenario(scenarioFile):
+    try:
+        scenario = []
+        fp = open(scenarioFile)
+        for line in fp:
+            line = line.rstrip('\n')
+            line = line.split()
+            action = {}
+            for argument in line:
+                if argument == 'sleep' or argument == 'set' or \
+                    argument == 'reset' or argument == 'hungry' or \
+                    argument == 'exit':
+                    action['ACTION'] = argument
+                else:
+                    action['ARG'] = argument
+                scenario.append(action)
+        return scenario            
+    except IOError as e:
+        print e.message()
+        print 'The program will exit'
+        exit(1) 
+ 
+ 
+def playScenario(scenarioFile, peerQueue, peerSock, sinkServer):           
+    
+    scenario = buildScenario(scenarioFile)
+    for cmd in scenario:
+        if cmd['ACTION'] == 'sleep':
+            sleep(int(cmd['ARG']))
+            
+        elif cmd['ACTION'] == 'set':
+            dataItem = str(choice(1000))
+            dataId = MsgFactory.generateMessageId(dataItem)
+            txMsg = MsgFactory.create(MsgType.PR_SETUP, 
+                                      dst=cmd['ARG'], 
+                                      data=dataItem,
+                                       dataId=dataId)
+            peerSock.send_multipart(['Set', txMsg])
+            
+        elif cmd['ACTION'] == 'reset':
+            print 'Reseting nodes'
+            peerSock.send_string('Reset')
+            
+        elif cmd['ACTION'] == 'hungry':
+            txMsg = MsgFactory.create(MsgType.PR_GET_HUNGRY, dst=cmd['ARG'])
+            peerSock.send_multipart([cmd['ARG'], txMsg])
+        
+        elif cmd['ACTION'] == 'exit':
+            print 'Exiting'
+            peerSock.send_string('Exit')
+            sinkServer.join()
+            peerQueue.join()
+            exit(0)
         
 def main():
     
@@ -174,21 +226,29 @@ def main():
     p.add_argument('-c', dest='cleanLogs', action='store_true', default=False,
                    help='Decide to empty the log files')
     
+    
+    p.add_argument('-s', dest='scenarioFile', action='store', default=None,
+                   help = 'Scenario file that holds the Path Reversal scenario')
+    
     args = p.parse_args()
     
     if args.nodes == None:
         print 'Nodes file is not given...Program will exit'
         exit(1)
     
-    sinkSockBindAddr = "tcp://*:9090"
-    pubSockBindAddr = "tcp://*:5558" 
-    sinkAddr = "tcp://127.0.0.1:9090"
-    pubAgentBindAddress = 'tcp://127.0.0.1:5558'
-    
+    if args.scenarioFile == None:
+        print 'Please provide a scenario file...Program will exit'
+        exit(1)
     
     if args.cleanLogs == True:
         rmtree(args.logDirectory, ignore_errors=True)
         mkdir('logs')
+    
+    
+    sinkSockBindAddr = "tcp://*:9090"
+    pubSockBindAddr = "tcp://*:5558" 
+    sinkAddr = "tcp://127.0.0.1:9090"
+    pubAgentBindAddress = 'tcp://127.0.0.1:5558'
     
     context = zmq.Context()
     print 'Creating PeerSink server...'
@@ -206,19 +266,17 @@ def main():
     ctrlSock = context.socket(zmq.PUB)
     ctrlSock.bind(pubSockBindAddr)
     print 'Waiting for  setup to finish'
+    sleep(5)
     print '# # # # # # # # # # #  # # # # # # #  # # # # #'
-    sleep(10)
     
     print 'Test Nodes Communication channel with the Agent'
     testBidirectionalChannel(ctrlSock, peerQueue)
     print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'    
     
-    
     print 'Establish connections with the Neighbors'
     ctrlSock.send_string('ConnectToNeighbor')
-    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
-    
     sleep(1)
+    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
     
     if len(peerHosts) > 1:
         print 'Test peer connection with their Neighbors'
@@ -226,50 +284,44 @@ def main():
         print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
   
     sleep(5)
-    
-    print 'Data Testing: Entrance-Entrance case'
-    dataTest = "Entrance-Entrance"
-    verifyDataMovement(peerHosts[0], peerHosts[0], dataTest, ctrlSock, peerQueue)
-    print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
-    sleep(2)
-     
-    print 'Data Testing: Entrance 1-hop case'
-    dataTest = "1-hop"
-    verifyDataMovement(peerHosts[0], peerHosts[1], dataTest, ctrlSock, peerQueue)
-    print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
-    sleep(4)
-    
-    
-    print 'Data Testing: Entrance 2-hop case'
-    dataTest = "2-hop"
-    verifyDataMovement(peerHosts[0], peerHosts[5], dataTest, ctrlSock, peerQueue)
-    print " % %  % % % %  % % % % % % % %  % % % % % % % % % % % %"
-    
-    print 'Move Existing message around-Success'
-    existingDid = MsgFactory.generateMessageId(dataTest)
-    verifyDataMovement(peerHosts[5], peerHosts[7], 
-                       None, ctrlSock, peerQueue, existingDid)
-    print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
-    
-    
-    print 'Move Existing message around-Fail'
-    existingDid = MsgFactory.generateMessageId("notExistingData")
-    verifyDataMovement(peerHosts[4], peerHosts[7], 
-                       None, ctrlSock, peerQueue, existingDid)
-    print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
-    
-    
-    print 'Query Fifo-stats on node'
-    queryNodeFifoStats(peerHosts[3], ctrlSock, peerQueue)
-    print "# # # # # # # #  # # # # # # # # ## # ## # # # # "
-    
-    print 'Exiting'
-    ctrlSock.send_string('Exit')
-    print '# # # # # # # # # # #  # # # # # # #  # # # # #'
-    sinkServer.join()
-    peerQueue.join()
-    exit(1)
-    
+    playScenario(args.scenarioFile, ctrlSock, peerQueue)
+#     print 'Data Testing: Entrance-Entrance case'
+#     dataTest = "Entrance-Entrance"
+#     verifyDataMovement(peerHosts[0], peerHosts[0], dataTest, ctrlSock, peerQueue)
+#     print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
+#     sleep(2)
+#      
+#     print 'Data Testing: Entrance 1-hop case'
+#     dataTest = "1-hop"
+#     verifyDataMovement(peerHosts[0], peerHosts[1], dataTest, ctrlSock, peerQueue)
+#     print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
+#     sleep(4)
+#     
+#     
+#     print 'Data Testing: Entrance 2-hop case'
+#     dataTest = "2-hop"
+#     verifyDataMovement(peerHosts[0], peerHosts[5], dataTest, ctrlSock, peerQueue)
+#     print " % %  % % % %  % % % % % % % %  % % % % % % % % % % % %"
+#     
+#     print 'Move Existing message around-Success'
+#     existingDid = MsgFactory.generateMessageId(dataTest)
+#     verifyDataMovement(peerHosts[5], peerHosts[7], 
+#                        None, ctrlSock, peerQueue, existingDid)
+#     print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
+#     
+#     
+#     print 'Move Existing message around-Fail'
+#     existingDid = MsgFactory.generateMessageId("notExistingData")
+#     verifyDataMovement(peerHosts[4], peerHosts[7], 
+#                        None, ctrlSock, peerQueue, existingDid)
+#     print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
+#     
+#     
+#     print 'Query Fifo-stats on node'
+#     queryNodeFifoStats(peerHosts[3], ctrlSock, peerQueue)
+#     print "# # # # # # # #  # # # # # # # # ## # ## # # # # "
+#     
+#     
     
 if __name__ == "__main__":
     main()

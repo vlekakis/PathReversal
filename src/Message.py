@@ -20,6 +20,9 @@ class MsgType(object):
     FIFO_STATS_QUERY = 12
     PR_REQ = 13
     PR_OBJ = 14
+    PR_SETUP = 15
+    PR_GET_HUNGRY = 16
+    PR_REQ_ACK =17
 
 class MsgFactory(object):
     
@@ -33,6 +36,7 @@ class MsgFactory(object):
         msg[MsgType.SOURCE] = src
         msg = dumps(msg)
         return msg
+    
     
     @staticmethod
     def generateMessageId(data):
