@@ -160,10 +160,12 @@ def buildScenario(scenarioFile):
         scenario = []
         fp = open(scenarioFile)
         for line in fp:
+            print line
             line = line.rstrip('\n')
             line = line.split()
             action = {}
             for argument in line:
+                #print argument
                 if argument == 'sleep' or argument == 'set' or \
                     argument == 'reset' or argument == 'hungry' or \
                     argument == 'exit':
@@ -171,6 +173,7 @@ def buildScenario(scenarioFile):
                 else:
                     action['ARG'] = argument
                 scenario.append(action)
+        #print scenario
         return scenario            
     except IOError as e:
         print e.message()
@@ -178,7 +181,7 @@ def buildScenario(scenarioFile):
         exit(1) 
  
  
-def playScenario(scenarioFile, peerQueue, peerSock, sinkServer):           
+def playScenario(scenarioFile, peerSock, peerQueue, sinkServer):           
     
     scenario = buildScenario(scenarioFile)
     for cmd in scenario:
@@ -186,12 +189,13 @@ def playScenario(scenarioFile, peerQueue, peerSock, sinkServer):
             sleep(int(cmd['ARG']))
             
         elif cmd['ACTION'] == 'set':
-            dataItem = str(choice(1000))
+            dataItem = str(choice(xrange(1000)))
             dataId = MsgFactory.generateMessageId(dataItem)
             txMsg = MsgFactory.create(MsgType.PR_SETUP, 
                                       dst=cmd['ARG'], 
                                       data=dataItem,
                                        dataId=dataId)
+            print 'Setting object', dataItem, 'to node:', cmd['ARG']
             peerSock.send_multipart(['Set', txMsg])
             
         elif cmd['ACTION'] == 'reset':
@@ -217,9 +221,7 @@ def main():
     p.add_argument('-n', dest='nodes', action='store', default=None,
                    help='Nodes file with the format <address:port> or <localhost:port>')
     
-    p.add_argument('-k', dest='keyboard', action='store_true', default=False,
-                   help='Keyboard driven run of the system')
-    
+
     p.add_argument('-l', dest='logDirectory', action='store', default='logs',
                    help='Location of the peer log files')
     
@@ -284,7 +286,7 @@ def main():
         print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
   
     sleep(5)
-    playScenario(args.scenarioFile, ctrlSock, peerQueue)
+    playScenario(args.scenarioFile, ctrlSock, peerQueue, sinkServer)
 #     print 'Data Testing: Entrance-Entrance case'
 #     dataTest = "Entrance-Entrance"
 #     verifyDataMovement(peerHosts[0], peerHosts[0], dataTest, ctrlSock, peerQueue)

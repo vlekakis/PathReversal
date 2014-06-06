@@ -34,9 +34,7 @@ class FifoNode(object):
     def getDest(self, msg):
         m = json.loads(msg[1])
         return m[MsgType.DST]
-
-        
-        
+    
     def updateFifoStats(self, dest, msg, tx=False, rx=False):
         key = repr((self.name, dest))
         if tx == True:
