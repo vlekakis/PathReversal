@@ -1,5 +1,36 @@
+
+
+import cPickle
 from Message import MsgType
 from Message import MsgFactory
+
+class PRStatusUpdate(object):
+    NEXT = "next"
+    LAST =  "last"
+    STATUS = "status"
+    SEQ = "SEQ"
+    SATISFY = "SATISFY"
+
+    @staticmethod
+    def createStatusUpdate(mtype, seqNum, status, next, last, satisfy):
+        statusUpdate = {}
+        statusUpdate[MsgType.TYPE] = mtype
+        statusUpdate[PRStatusUpdate.SEQ] = seqNum
+        statusUpdate[PRStatusUpdate.STATUS] = status
+        statusUpdate[PRStatusUpdate.NEXT] = next
+        statusUpdate[PRStatusUpdate.LAST] = last
+        statusUpdate[PRStatusUpdate.SATISFY] = satisfy
+        statusUpdate = cPickle.dumps(statusUpdate)
+        return statusUpdate
+    
+    @staticmethod
+    def createStatusACKMessage(seqNum):
+        statusAck = {}
+        statusAck[MsgType.TYPE] = MsgType.PR_STATUS_ACK
+        statusAck[PRStatusUpdate.SEQ] = seqNum
+        statusAck = cPickle.dumps(statusAck)
+        return statusAck
+    
 
 class PRStatus(object):
     THINKING = 0
@@ -13,15 +44,17 @@ class PRNext(object):
 
 class PathReversal(object):
     
-    def __init__(self, itemHolder, item):
-        self.set(itemHolder, item)
+    def __init__(self, itemHolder, item, logger):
+        self.set(itemHolder, item, logger)
+        self.seq = 0
     
     def becomeHungry(self, issuerNetName):
         if self.status == PRStatus.THINKING:
             self.status = PRStatus.HUNGRY
             prReq = MsgFactory.create(MsgType.PR_REQ, 
                                     dst=self.last, src=issuerNetName)
-            return prReq
+            self.logger.debug("\t[PR-LOG] Status: HUNGRY")
+            return prReq,self.last
         return False
     
     def becomeThinking(self):
@@ -31,10 +64,14 @@ class PathReversal(object):
             self.status = PRStatus.THINKING
             self.next = None
             self.data = None
-            
+            self.logger.debug("\t[PR-LOG] Status: THINKING")
             return True
         return False
     
+    def getStatus(self):
+        status = (self.seq, self.status, self.next, self.last)
+        self.seq+=1
+        return status
     
     def reset(self):
         self.data = None
@@ -42,27 +79,28 @@ class PathReversal(object):
         self.last = None
         self.status = PRStatus.THINKING
     
-    def set(self, itemHolder, item):
+    def set(self, itemHolder, item, logger):
+        self.logger = logger
         if item != None:
             self.last = None
             self.next = None
-            self.data = item
-            self.status = PRStatus.EATING
+            self.becomeEating(item)
         else:
             self.last = itemHolder
             self.next = None
-            self.object = None
+            self.data = None
             self.status = PRStatus.THINKING
             
     
-    def becomeEating(self):
+    def becomeEating(self, data):
+        self.logger.debug("\t[PR-LOG] Status: EATING data:"+str(data))
         self.status = PRStatus.EATING
-        
+        self.data = data
     
     def recv(self, forwarderNetName,msg):
         
         toNode = None
-        if self.object == None:
+        if self.data == None:
             if self.last != None:
                 toNode = self.last
                 self.last = msg[MsgType.SOURCE]
@@ -80,7 +118,4 @@ class PathReversal(object):
             assert self.becomeThinking()
             
             return toTx
-                
-        #elif msg[MsgType.TYPE] == MsgType.PR_OBJ:
-        #    self.becomeEating()
-        #    return (False, None)
+        

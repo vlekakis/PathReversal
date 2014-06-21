@@ -1,7 +1,7 @@
-
+import logging
 import argparse
 import zmq
-import pickle
+import cPickle
 from sys import exit
 from time import sleep
 from NodeStatus import NodeStatus
@@ -13,12 +13,19 @@ from Queue import Queue, Empty
 from AgentSink import AgentSinkServer
 from shutil import rmtree
 from os import mkdir
-from json import loads
 from random import choice
+from PathReversal import PRStatusUpdate
+from PathReversal import PRStatus
 
 
 
 Nodes = {}
+NodeObjectStatus = {}
+LOGFILE = "objectService.log"
+
+helpLog = {PRStatus.EATING: "Eating", 
+           PRStatus.THINKING: "Thinking",
+           PRStatus.HUNGRY: "Hungry"}
 
 
 def isLocalNode(ip):
@@ -40,7 +47,7 @@ def establishLocalNode(nodeName, pubAgentAddr, sinkAgentAddr, neighbor):
 def establishRemoteNode(node):
     print 'Node', node['ip'], node['port'],  'has been initiated'
 
-def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
+def initiateNodes(filename, pubAgentAddr, sinkAgentAddr, manual):
     
     peersHosts = []
     fp = open(filename)
@@ -64,7 +71,7 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr):
     
     for h in peersHosts:
         neighbor = peersHosts[(peersHosts.index(h)+1)%len(peersHosts)]
-        if isLocalNode(Nodes[h]['ip']) == True:
+        if isLocalNode(Nodes[h]['ip']) == True and manual == False:
             res = establishLocalNode(h, pubAgentAddr, sinkAgentAddr, neighbor)
             Nodes[host]['status'] = NodeStatus.DRIVER_INITIALIZED
             
@@ -87,7 +94,7 @@ def queryNodeFifoStats(host, sck, msgQ):
             while msgQ.empty() == False:
                 msg = msgQ.get(False)
                 assert len(msg) == 2
-                msgIn = pickle.loads(msg[1])
+                msgIn = cPickle.loads(msg[1])
                 print msgIn.tx
                 print msgIn.rx
                 msgQ.task_done()
@@ -110,7 +117,7 @@ def verifyDataMovement(entranceNode, dest, data, sock, msgQ, dataId=None):
             while msgQ.empty() == False:
                 msg = msgQ.get(False)
                 assert len(msg) == 2
-                msgIn = loads(msg[1])
+                msgIn = cPickle.loads(msg[1])
                 if msgIn[MsgType.TYPE] == MsgType.DATA_ACK and \
                     msg[0] == dest and msgIn[MsgType.DATA_ID] == dataId:
                     msgQ.task_done()
@@ -127,7 +134,7 @@ def verifyDataMovement(entranceNode, dest, data, sock, msgQ, dataId=None):
                     
                 
 
-def testBidirectionalChannel(sock, msgQ):
+def testBidirectionalChannel(sock, msgInQ, msgOutQ):
     
     mCheck=0
     packet = MsgFactory.create(MsgType.AGENT_TEST_MSG)
@@ -137,12 +144,14 @@ def testBidirectionalChannel(sock, msgQ):
         
     while True:
         try:
-            while msgQ.empty() == False:
-                msg = msgQ.get(False)
+            while msgInQ.empty() == False:
+                msg = msgInQ.get(False)
                 Nodes[msg[0]]['status'] = NodeStatus.DRIVER_FUNCTIONAL
-
+                msgInQ.task_done()
+                msgOutQ.put([msg[0], "ack"])
+                
                 mCheck+=1
-                msgQ.task_done()
+                
                 if mCheck==len(Nodes.keys()):
                     print 'Received all ACK messages'
                     return
@@ -160,7 +169,8 @@ def buildScenario(scenarioFile):
         scenario = []
         fp = open(scenarioFile)
         for line in fp:
-            print line
+            if line.startswith('#'):
+                continue
             line = line.rstrip('\n')
             line = line.split()
             action = {}
@@ -172,20 +182,78 @@ def buildScenario(scenarioFile):
                     action['ACTION'] = argument
                 else:
                     action['ARG'] = argument
-                scenario.append(action)
-        #print scenario
+            scenario.append(action)
+        
         return scenario            
     except IOError as e:
         print e.message()
         print 'The program will exit'
         exit(1) 
  
- 
-def playScenario(scenarioFile, peerSock, peerQueue, sinkServer):           
+def verifyObjectTransferService(hungryQ):
+    try:
+        nodeExpectedToBeEating = hungryQ.get(False)
+        print "Node expected to be Eating",  nodeExpectedToBeEating
+        for n in NodeObjectStatus.keys():
+            if n != nodeExpectedToBeEating:
+                assert NodeObjectStatus[n] != PRStatus.EATING
+            else:
+                assert NodeObjectStatus[n] == PRStatus.EATING
+    except Empty:
+        print "There should be at least on hungry node by now"
+        assert False
+
+    logging.info("-----ObjectService-Verification------")
+    for n in NodeObjectStatus.keys():
+        logging.info("Node "+n+" status: "+helpLog[NodeObjectStatus[n]])
+        
+
+def verifyOperation(update, hungryQ):
+    node = update[0]
+    update = cPickle.loads(update[1])
     
+    if node not in NodeObjectStatus.keys():
+        NodeObjectStatus[node] = "N/A"
+    
+    print "Current Node Status(", node, ")", NodeObjectStatus[node]
+    NodeObjectStatus[node] = update[PRStatusUpdate.STATUS]
+    print "Changed Node Status(", node, ")", NodeObjectStatus[node]
+    if update[PRStatusUpdate.SATISFY] == True:
+        print 'Satisfy-Message'
+        verifyObjectTransferService(hungryQ)
+    else:
+        print 'Status-Update Message'
+    
+    #TODO: LR-part
+    
+    statusAck = PRStatusUpdate.createStatusACKMessage(update[PRStatusUpdate.SEQ])
+    return (node, statusAck)
+ 
+def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):           
+    
+    hungryQ = Queue()
     scenario = buildScenario(scenarioFile)
+    logging.basicConfig(level=logging.INFO, filename=LOGFILE)
+    
     for cmd in scenario:
+    
+        try:
+            print 'Testing if there is anything available in the Queue'
+            updateAck = inQueue.get(True, timeout=1)
+            inQueue.task_done()
+            node, statusAck = verifyOperation(updateAck, hungryQ)
+            
+            print 'Sending ACK back to the ', node            
+            outQueue.put([node, statusAck])
+                
+            
+            
+        except Empty:
+            print 'Queue Empty'
+            pass
+        
         if cmd['ACTION'] == 'sleep':
+            print 'Waiting for ', cmd['ARG']
             sleep(int(cmd['ARG']))
             
         elif cmd['ACTION'] == 'set':
@@ -203,6 +271,8 @@ def playScenario(scenarioFile, peerSock, peerQueue, sinkServer):
             peerSock.send_string('Reset')
             
         elif cmd['ACTION'] == 'hungry':
+            hungryQ.put_nowait(cmd['ARG'])
+            print 'Set Hungry node ', cmd['ARG']
             txMsg = MsgFactory.create(MsgType.PR_GET_HUNGRY, dst=cmd['ARG'])
             peerSock.send_multipart([cmd['ARG'], txMsg])
         
@@ -210,7 +280,7 @@ def playScenario(scenarioFile, peerSock, peerQueue, sinkServer):
             print 'Exiting'
             peerSock.send_string('Exit')
             sinkServer.join()
-            peerQueue.join()
+            inQueue.join()
             exit(0)
         
 def main():
@@ -231,6 +301,12 @@ def main():
     
     p.add_argument('-s', dest='scenarioFile', action='store', default=None,
                    help = 'Scenario file that holds the Path Reversal scenario')
+    
+    
+    p.add_argument('--manual', dest='manual', action='store_true', default=False,
+                   help='Manual fifonodes')
+    
+    
     
     args = p.parse_args()
     
@@ -254,25 +330,30 @@ def main():
     
     context = zmq.Context()
     print 'Creating PeerSink server...'
-    peerQueue = Queue(10)
-    sinkSock = context.socket(zmq.PULL)
+    peerIncomingQueue = Queue(10)
+    peerOutgoingQueue = Queue(10)
+    sinkSock = context.socket(zmq.REP)
     
-    sinkServer = AgentSinkServer(peerQueue, sinkSock, sinkSockBindAddr)
+    sinkServer = AgentSinkServer(peerIncomingQueue, peerOutgoingQueue,
+                                 sinkSock, sinkSockBindAddr)
     sinkServer.start()
     
+
+    
     print 'Initiating nodes from file....', args.nodes
-    peerHosts = initiateNodes(args.nodes, pubAgentBindAddress, sinkAddr)
+    peerHosts = initiateNodes(args.nodes, pubAgentBindAddress, sinkAddr, args.manual)
     
     
     print 'Creating pub-Agent socket'
     ctrlSock = context.socket(zmq.PUB)
     ctrlSock.bind(pubSockBindAddr)
+    
     print 'Waiting for  setup to finish'
     sleep(5)
     print '# # # # # # # # # # #  # # # # # # #  # # # # #'
     
     print 'Test Nodes Communication channel with the Agent'
-    testBidirectionalChannel(ctrlSock, peerQueue)
+    testBidirectionalChannel(ctrlSock, peerIncomingQueue, peerOutgoingQueue)
     print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'    
     
     print 'Establish connections with the Neighbors'
@@ -286,44 +367,9 @@ def main():
         print '@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @'
   
     sleep(5)
-    playScenario(args.scenarioFile, ctrlSock, peerQueue, sinkServer)
-#     print 'Data Testing: Entrance-Entrance case'
-#     dataTest = "Entrance-Entrance"
-#     verifyDataMovement(peerHosts[0], peerHosts[0], dataTest, ctrlSock, peerQueue)
-#     print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
-#     sleep(2)
-#      
-#     print 'Data Testing: Entrance 1-hop case'
-#     dataTest = "1-hop"
-#     verifyDataMovement(peerHosts[0], peerHosts[1], dataTest, ctrlSock, peerQueue)
-#     print '!! ! ! ! !! !! !! !!!! !!! !!! !!! !! !! ! ! ! ! ! ! ! ! !!' 
-#     sleep(4)
-#     
-#     
-#     print 'Data Testing: Entrance 2-hop case'
-#     dataTest = "2-hop"
-#     verifyDataMovement(peerHosts[0], peerHosts[5], dataTest, ctrlSock, peerQueue)
-#     print " % %  % % % %  % % % % % % % %  % % % % % % % % % % % %"
-#     
-#     print 'Move Existing message around-Success'
-#     existingDid = MsgFactory.generateMessageId(dataTest)
-#     verifyDataMovement(peerHosts[5], peerHosts[7], 
-#                        None, ctrlSock, peerQueue, existingDid)
-#     print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
-#     
-#     
-#     print 'Move Existing message around-Fail'
-#     existingDid = MsgFactory.generateMessageId("notExistingData")
-#     verifyDataMovement(peerHosts[4], peerHosts[7], 
-#                        None, ctrlSock, peerQueue, existingDid)
-#     print 'x x x x x x x x x x  x xxx x x x  xx x x x  xx x x xx x x x x '
-#     
-#     
-#     print 'Query Fifo-stats on node'
-#     queryNodeFifoStats(peerHosts[3], ctrlSock, peerQueue)
-#     print "# # # # # # # #  # # # # # # # # ## # ## # # # # "
-#     
-#     
+    playScenario(args.scenarioFile, ctrlSock, 
+                 peerIncomingQueue, peerOutgoingQueue, sinkServer)
+
     
 if __name__ == "__main__":
     main()
