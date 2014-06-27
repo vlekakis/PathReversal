@@ -16,15 +16,12 @@ class AgentSinkServer(threading.Thread):
     def run(self):
         while not self.stopRequest.is_set():
             msgIn = self.sinkSock.recv_multipart()
-            print 'SINK-IN', msgIn
             self.writeQueue.put(msgIn,False)
             
             msgOut = self.readQueue.get(True)
             self.readQueue.task_done()
-            print 'SINK out', msgOut
-            s = self.sinkSock.send_multipart(msgOut)
-            print s
- 
+            self.sinkSock.send_multipart(msgOut)
+        
          
     def join(self, timeout=0):
         self.stopRequest.set()

@@ -54,7 +54,10 @@ class PathReversal(object):
             prReq = MsgFactory.create(MsgType.PR_REQ, 
                                     dst=self.last, src=issuerNetName)
             self.logger.debug("\t[PR-LOG] Status: HUNGRY")
-            return prReq,self.last
+            
+            last = self.last
+            self.last = None
+            return prReq,last
         return False
     
     def becomeThinking(self):

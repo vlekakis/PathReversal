@@ -2,6 +2,8 @@ import logging
 import argparse
 import zmq
 import cPickle
+import networkx as nx
+import matplotlib.pyplot as plt
 from sys import exit
 from time import sleep
 from NodeStatus import NodeStatus
@@ -13,6 +15,7 @@ from Queue import Queue, Empty
 from AgentSink import AgentSinkServer
 from shutil import rmtree
 from os import mkdir
+from os import system
 from random import choice
 from PathReversal import PRStatusUpdate
 from PathReversal import PRStatus
@@ -22,6 +25,15 @@ from PathReversal import PRStatus
 Nodes = {}
 NodeObjectStatus = {}
 LOGFILE = "objectService.log"
+graphLast = {}
+graphNext = {}
+graphNetXLast = nx.DiGraph()
+graphNetXNext = nx.DiGraph()
+graphCounter = 0
+graphLastFiles="graphProgress/graph_stepL_%s"
+graphNextFiles="graphProgress/graph_stepN_%s"
+stepLabel = "step%s"
+
 
 helpLog = {PRStatus.EATING: "Eating", 
            PRStatus.THINKING: "Thinking",
@@ -50,6 +62,8 @@ def establishRemoteNode(node):
 def initiateNodes(filename, pubAgentAddr, sinkAgentAddr, manual):
     
     peersHosts = []
+    nodeName = "Node%s"
+    nodeCounter = 1
     fp = open(filename)
     for host in fp:
         print host
@@ -67,6 +81,10 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr, manual):
         Nodes[host]['port'] = node[1]
         Nodes[host]['status'] = NodeStatus.DRIVER_PARSED
         Nodes[host]['name'] = host
+        
+        strCounter = '0'*(3-len(str(nodeCounter))) + str(nodeCounter)
+        Nodes[host]['friendlyName'] = nodeName %(strCounter)
+        nodeCounter+=1
         peersHosts.append(host)
     
     for h in peersHosts:
@@ -190,6 +208,18 @@ def buildScenario(scenarioFile):
         print 'The program will exit'
         exit(1) 
  
+ 
+def initiateDrawingGraph(scenario):
+    for action in scenario:
+        if action["ACTION"] == "set":
+            root = action["ARG"]
+            for n in Nodes.keys():
+                if n == root:
+                    continue
+                else:
+                    updateDrawingGraph(n, root, None)
+            break
+ 
 def verifyObjectTransferService(hungryQ):
     try:
         nodeExpectedToBeEating = hungryQ.get(False)
@@ -206,9 +236,100 @@ def verifyObjectTransferService(hungryQ):
     logging.info("-----ObjectService-Verification------")
     for n in NodeObjectStatus.keys():
         logging.info("Node "+n+" status: "+helpLog[NodeObjectStatus[n]])
+
+def updateGraph (node, last, nextNode):
+    
+    if node not in graphLast.keys():
+        graphLast[node] = []
+    
+    if node not in graphNext.keys():
+        graphNext[node] = []
+    
+    if last not in graphLast[node]:
+        del graphLast[node]
+        graphLast[node] = []
+        graphLast[node].append(node)
+    
+    if nextNode not in graphNext[node]:
+        del graphNext[node]
+        graphNext[node] = []
+        graphNext[node].append(nextNode)
         
 
-def verifyOperation(update, hungryQ):
+def updateDrawingGraph(node, last, nextNode):
+    
+    
+    friendlySrcName = Nodes[node]["friendlyName"]
+    friendlyLastName = "None"
+    if last != None and last != "None":
+        friendlyLastName = Nodes[last]["friendlyName"]
+    friendlyNextName = "None"
+    if nextNode != None:
+        friendlyNextName = Nodes[nextNode]["friendlyName"]
+    
+    
+    print "Last", friendlySrcName, friendlyLastName
+    if graphNetXLast.has_node(friendlySrcName):
+        neighbors = graphNetXLast.neighbors(friendlySrcName)
+        for n in neighbors:
+            graphNetXLast.remove_edge(friendlySrcName, n)
+        if last != None:
+            graphNetXLast.add_edge(friendlySrcName, friendlyLastName)
+    else:
+        if last != None:
+            graphNetXLast.add_edge(friendlySrcName, friendlyLastName)
+        
+        
+    
+    if graphNetXNext.has_node(friendlySrcName):
+        neighbors = graphNetXNext.neighbors(friendlySrcName)
+        for n in neighbors:
+            graphNetXNext.remove_edge(friendlySrcName, n)
+        graphNetXNext.add_edge(friendlySrcName, friendlyNextName)
+    else:
+        graphNetXNext.add_edge(friendlySrcName, friendlyNextName)
+
+def drawGraph(graph, filename, title):    
+        plt.title(title)
+        
+        position = nx.spring_layout(graph, iterations=20000)
+        nx.draw(graph, position,  node_color=range(len(graph.nodes())),
+                node_size=3500, with_labels=True, alpha=0.6)
+        
+        plt.savefig(filename)
+        plt.clf()
+        
+def createVideo():
+    cmd = "ffmpeg -r 1/1 -y -i graphProgress/graph_stepL_%03d.png -c:v libx264 -r 30 -pix_fmt yuv420p graphProgress/lastNetwork.mp4"
+    system(cmd)
+    cmd = "ffmpeg -r 1/1 -y -i graphProgress/graph_stepN_%03d.png -c:v libx264 -r 30 -pix_fmt yuv420p graphProgress/nextNetwork.mp4"
+    system(cmd)
+
+
+def findCycles(graph):
+    noCycleNodes = []
+    nodesTodo = set(graph.keys())
+    while nodesTodo:
+        node = nodesTodo.pop()
+        stack = [node]
+        
+        while stack:
+            stackTop = stack[-1]
+            for neighbor in graph[stackTop]:
+                if neighbor in stack:
+                    return stack[stack.index(neighbor)]
+                if neighbor in nodesTodo:
+                    stack.append(neighbor)
+                    nodesTodo.remove(neighbor)
+                    break
+                else:
+                    node = stack.pop()
+                    noCycleNodes.append(node)
+    return None
+            
+    
+
+def verifyOperation(update, hungryQ, graphCounter):
     node = update[0]
     update = cPickle.loads(update[1])
     
@@ -224,7 +345,23 @@ def verifyOperation(update, hungryQ):
     else:
         print 'Status-Update Message'
     
-    #TODO: LR-part
+    updateGraph(node, update[PRStatusUpdate.LAST], update[PRStatusUpdate.NEXT])
+    
+    
+    
+    updateDrawingGraph(node, update[PRStatusUpdate.LAST], update[PRStatusUpdate.NEXT])
+    
+    tmpName = "0"*(3-len(str(graphCounter)))+str(graphCounter)
+    title = stepLabel % (tmpName)
+    
+    print tmpName, findCycles(graphLast)
+    
+    
+    f = graphLastFiles % (tmpName)
+    drawGraph(graphNetXLast, f, title)
+    f = graphNextFiles % (tmpName)
+    drawGraph(graphNetXNext, f, title)
+    graphCounter+=1
     
     statusAck = PRStatusUpdate.createStatusACKMessage(update[PRStatusUpdate.SEQ])
     return (node, statusAck)
@@ -232,24 +369,25 @@ def verifyOperation(update, hungryQ):
 def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):           
     
     hungryQ = Queue()
+    counter = 1
     scenario = buildScenario(scenarioFile)
     logging.basicConfig(level=logging.INFO, filename=LOGFILE)
+    initiateDrawingGraph(scenario)
+    
+    drawGraph(graphNetXLast, "graphProgress/graph_stepL_000.png", "step000")
     
     for cmd in scenario:
     
         try:
-            print 'Testing if there is anything available in the Queue'
             updateAck = inQueue.get(True, timeout=1)
             inQueue.task_done()
-            node, statusAck = verifyOperation(updateAck, hungryQ)
+            node, statusAck = verifyOperation(updateAck, hungryQ, counter)
+            counter+=1
             
             print 'Sending ACK back to the ', node            
             outQueue.put([node, statusAck])
-                
-            
-            
+                  
         except Empty:
-            print 'Queue Empty'
             pass
         
         if cmd['ACTION'] == 'sleep':
@@ -278,6 +416,8 @@ def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):
         
         elif cmd['ACTION'] == 'exit':
             print 'Exiting'
+            print 'Creating videos'
+            createVideo()
             peerSock.send_string('Exit')
             sinkServer.join()
             inQueue.join()

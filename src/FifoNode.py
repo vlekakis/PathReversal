@@ -226,7 +226,7 @@ class FifoNode(object):
             
     def procAgentCmd(self, stream, msg):
         
-        print "Test"
+        
         if msg[0] == 'Exit':
             logging.debug("Received exit")
             stream.stop_on_recv()
@@ -268,7 +268,6 @@ class FifoNode(object):
                 self.prMod.set(itemHolder,item, logging)
         
         if len(msg) > 1:
-            print "LEN > 1"
             rxMsg = cPickle.loads(msg[1])
             
             if rxMsg[MsgType.TYPE] == MsgType.AGENT_TEST_MSG:
@@ -295,6 +294,7 @@ class FifoNode(object):
             elif rxMsg[MsgType.TYPE] == MsgType.PR_GET_HUNGRY:
                 logging.debug("\tReceived Message from server to get hungry")
                 txMsg, toWhom = self.prMod.becomeHungry(self.name)
+                self.ackAgent()
                 if txMsg != False:
                     logging.debug("\t[PR-LOG] Sending PR-Request to: "+toWhom)
                     self.peerCltStream.send_multipart([self.name, txMsg])
