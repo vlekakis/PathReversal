@@ -209,7 +209,7 @@ def buildScenario(scenarioFile):
         exit(1) 
  
  
-def initiateDrawingGraph(scenario):
+def initiateGraph(scenario, realGraph=False):
     for action in scenario:
         if action["ACTION"] == "set":
             root = action["ARG"]
@@ -217,9 +217,16 @@ def initiateDrawingGraph(scenario):
                 if n == root:
                     continue
                 else:
-                    updateDrawingGraph(n, root, None)
+                    if realGraph == True:
+                        updateGraph(n, root, None)
+                    else:
+                        updateDrawingGraph(n, root, None)
             break
- 
+
+
+
+
+
 def verifyObjectTransferService(hungryQ):
     try:
         nodeExpectedToBeEating = hungryQ.get(False)
@@ -248,7 +255,7 @@ def updateGraph (node, last, nextNode):
     if last not in graphLast[node]:
         del graphLast[node]
         graphLast[node] = []
-        graphLast[node].append(node)
+        graphLast[node].append(last)
     
     if nextNode not in graphNext[node]:
         del graphNext[node]
@@ -322,9 +329,9 @@ def findCycles(graph):
                     stack.append(neighbor)
                     nodesTodo.remove(neighbor)
                     break
-                else:
-                    node = stack.pop()
-                    noCycleNodes.append(node)
+            else:
+                node = stack.pop()
+                noCycleNodes.append(node)
     return None
             
     
@@ -372,7 +379,7 @@ def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):
     counter = 1
     scenario = buildScenario(scenarioFile)
     logging.basicConfig(level=logging.INFO, filename=LOGFILE)
-    initiateDrawingGraph(scenario)
+    initiateGraph(scenario)
     
     drawGraph(graphNetXLast, "graphProgress/graph_stepL_000.png", "step000")
     
