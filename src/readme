@@ -1,0 +1,15 @@
+To run you need the following
+
+0. python 2.7
+1. zmq
+2. ioloop/tornado
+3. matplotlib
+
+To run the driver you type:
+
+ python driver.py -n node.txt -s play.txt  -c -l logs/ -g graphProgress/
+or python driver.py -h for a help menu
+
+usage: driver.py [-h] [-n NODES] [-l LOGDIRECTORY] [-c] [-s SCENARIOFILE]
+                 [--manual] [-g GRAPHOUTPUT]
+

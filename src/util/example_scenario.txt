@@ -1,0 +1,17 @@
+set localhost:5001
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 10
+hungry localhost:5002
+hungry localhost:5003
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+hungry localhost:5004
+sleep 1
+sleep 1
+sleep 1
+exit

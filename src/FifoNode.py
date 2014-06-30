@@ -11,7 +11,8 @@ from Message import MsgType
 from Message import MsgFactory
 from copy import deepcopy
 from Queue import Queue, Empty
-
+from random import choice
+from time import sleep
 
 class FifoStats(object):
     
@@ -178,6 +179,8 @@ class FifoNode(object):
                     
                     
     def procPeerTxClientMsg(self, msg, status):
+        randomWaitOnFifo = choice(xrange(3))
+        sleep(randomWaitOnFifo)
         dst = self.getDest(msg)
         logging.debug("Client sending: "+str(msg))
         self.updateFifoStats(dst, msg, tx=True)

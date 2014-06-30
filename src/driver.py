@@ -24,7 +24,7 @@ from PathReversal import PRStatus
 
 Nodes = {}
 NodeObjectStatus = {}
-LOGFILE = "objectService.log"
+LOGFILE = "logs/objectService.log"
 graphLast = {}
 graphNext = {}
 graphNetXLast = nx.DiGraph()
@@ -225,24 +225,22 @@ def initiateGraph(scenario, realGraph=False):
 
 
 
-
-
-def verifyObjectTransferService(hungryQ):
-    try:
-        nodeExpectedToBeEating = hungryQ.get(False)
-        print "Node expected to be Eating",  nodeExpectedToBeEating
-        for n in NodeObjectStatus.keys():
-            if n != nodeExpectedToBeEating:
-                assert NodeObjectStatus[n] != PRStatus.EATING
-            else:
-                assert NodeObjectStatus[n] == PRStatus.EATING
-    except Empty:
-        print "There should be at least on hungry node by now"
-        assert False
-
+def verifyOnlyOneNodeIsEating(hungryNodes):
+    
     logging.info("-----ObjectService-Verification------")
+    eatingNode = ""
+    eatingCounter = 0
     for n in NodeObjectStatus.keys():
-        logging.info("Node "+n+" status: "+helpLog[NodeObjectStatus[n]])
+        if NodeObjectStatus[n] == PRStatus.EATING:
+            eatingNode = n
+            eatingCounter+=1
+            logging.info("Node "+n+" status: "+helpLog[NodeObjectStatus[n]])
+    
+    
+    assert eatingCounter == 1
+    assert eatingNode in hungryNodes
+    hungryNodes.remove(eatingNode)
+    
 
 def updateGraph (node, last, nextNode):
     
@@ -336,7 +334,7 @@ def findCycles(graph):
             
     
 
-def verifyOperation(update, hungryQ, graphCounter):
+def verifyOperation(update, hungryNodes, graphCounter):
     node = update[0]
     update = cPickle.loads(update[1])
     
@@ -348,7 +346,8 @@ def verifyOperation(update, hungryQ, graphCounter):
     print "Changed Node Status(", node, ")", NodeObjectStatus[node]
     if update[PRStatusUpdate.SATISFY] == True:
         print 'Satisfy-Message'
-        verifyObjectTransferService(hungryQ)
+        verifyOnlyOneNodeIsEating(hungryNodes)
+        
     else:
         print 'Status-Update Message'
     
@@ -375,7 +374,7 @@ def verifyOperation(update, hungryQ, graphCounter):
  
 def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):           
     
-    hungryQ = Queue()
+    hungryNodes = []
     counter = 1
     scenario = buildScenario(scenarioFile)
     logging.basicConfig(level=logging.INFO, filename=LOGFILE)
@@ -388,7 +387,7 @@ def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):
         try:
             updateAck = inQueue.get(True, timeout=1)
             inQueue.task_done()
-            node, statusAck = verifyOperation(updateAck, hungryQ, counter)
+            node, statusAck = verifyOperation(updateAck, hungryNodes, counter)
             counter+=1
             
             print 'Sending ACK back to the ', node            
@@ -416,7 +415,7 @@ def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):
             peerSock.send_string('Reset')
             
         elif cmd['ACTION'] == 'hungry':
-            hungryQ.put_nowait(cmd['ARG'])
+            hungryNodes.append(cmd['ARG'])
             print 'Set Hungry node ', cmd['ARG']
             txMsg = MsgFactory.create(MsgType.PR_GET_HUNGRY, dst=cmd['ARG'])
             peerSock.send_multipart([cmd['ARG'], txMsg])
@@ -454,6 +453,8 @@ def main():
                    help='Manual fifonodes')
     
     
+    p.add_argument('-g', dest='graphOutput', action='store', default='graphProgress',
+                   help='Location of the graph output files')
     
     args = p.parse_args()
     
@@ -466,8 +467,11 @@ def main():
         exit(1)
     
     if args.cleanLogs == True:
+        rmtree(args.graphOutput, ignore_errors=True)
+        mkdir(args.graphOutput)
+        
         rmtree(args.logDirectory, ignore_errors=True)
-        mkdir('logs')
+        mkdir(args.logDirectory)
     
     
     sinkSockBindAddr = "tcp://*:9090"
