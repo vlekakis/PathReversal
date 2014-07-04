@@ -23,6 +23,7 @@ from PathReversal import PRStatus
 
 
 Nodes = {}
+NodeProcesses = []
 NodeObjectStatus = {}
 LOGFILE = "logs/objectService.log"
 graphLast = {}
@@ -51,6 +52,7 @@ def establishLocalNode(nodeName, pubAgentAddr, sinkAgentAddr, neighbor):
     fifoNode = FifoNode()
     netWorker = Process(target=fifoNode.runFifoNetWorker, 
                         args=(nodeName, pubAgentAddr, sinkAgentAddr, neighbor))
+    netWorker.daemon = True
     netWorker.start()
     print 'Node', nodeName , 'initiated'
     return netWorker
@@ -90,7 +92,7 @@ def initiateNodes(filename, pubAgentAddr, sinkAgentAddr, manual):
     for h in peersHosts:
         neighbor = peersHosts[(peersHosts.index(h)+1)%len(peersHosts)]
         if isLocalNode(Nodes[h]['ip']) == True and manual == False:
-            res = establishLocalNode(h, pubAgentAddr, sinkAgentAddr, neighbor)
+            NodeProcesses.append(establishLocalNode(h, pubAgentAddr, sinkAgentAddr, neighbor))
             Nodes[host]['status'] = NodeStatus.DRIVER_INITIALIZED
             
         else:
@@ -423,11 +425,19 @@ def playScenario(scenarioFile, peerSock, inQueue, outQueue, sinkServer):
         elif cmd['ACTION'] == 'exit':
             print 'Exiting'
             print 'Creating videos'
-            createVideo()
+            #createVideo()
             peerSock.send_string('Exit')
-            sinkServer.join()
+            
             inQueue.join()
-            exit(0)
+            outQueue.join()
+            sinkServer.join()
+            for n in NodeProcesses:
+                print n, n.is_alive()
+                n.join()
+                n.terminate()
+            system("killall -9 python")
+    
+        
         
 def main():
     
@@ -521,6 +531,7 @@ def main():
     playScenario(args.scenarioFile, ctrlSock, 
                  peerIncomingQueue, peerOutgoingQueue, sinkServer)
 
+    
     
 if __name__ == "__main__":
     main()
