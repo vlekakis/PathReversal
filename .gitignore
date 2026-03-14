@@ -1,2 +1,13 @@
-
 .project
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+logs/
+graphProgress/
+*.mp4
