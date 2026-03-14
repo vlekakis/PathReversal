@@ -1,0 +1,21 @@
+[project]
+name = "path-reversal"
+version = "2.0.0"
+description = "Path Reversal algorithm for distributed mutual exclusion"
+requires-python = ">=3.8"
+dependencies = [
+    "pyzmq>=25.0",
+    "networkx>=3.0",
+    "matplotlib>=3.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

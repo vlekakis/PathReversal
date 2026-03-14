@@ -1,5 +1,5 @@
 
-from cPickle import dumps
+from pickle import dumps
 from hashlib import md5
 
 
@@ -47,5 +47,5 @@ class MsgFactory(object):
     @staticmethod
     def generateMessageId(data):
         dig = md5()
-        dig.update(str(data))
-        return dig.hexdigest() 
+        dig.update(str(data).encode())
+        return dig.hexdigest()

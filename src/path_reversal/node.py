@@ -1,31 +1,37 @@
+"""FifoNode — individual node process for the Path Reversal system.
+
+Each node runs as a separate process with ZMQ sockets for:
+- Subscribing to driver commands (PUB/SUB)
+- Communicating with the driver sink (REQ/REP)
+- Peer-to-peer communication in a ring (REQ/REP)
+"""
+
 import zmq
 import logging
 import pickle
 import argparse
-from PathReversal import PRNext
-from PathReversal import PathReversal
-from PathReversal import PRStatusUpdate
+from path_reversal.status import PRNext
+from path_reversal.algorithm import PathReversal, PRStatusUpdate
 from zmq.eventloop import ioloop
 from zmq.eventloop import zmqstream
-from Message import MsgType
-from Message import MsgFactory
+from path_reversal.message import MsgType, MsgFactory
 from copy import deepcopy
 from queue import Queue, Empty
 from random import choice
 from time import sleep
 
+logger = logging.getLogger(__name__)
+
 
 class FifoStats:
-
     def __init__(self):
         self.tx = {}
         self.rx = {}
         self.n = 0
         self.conStatus = {}
 
-    def repr(self):
-        print(self.tx)
-        print(self.rx)
+    def __repr__(self):
+        return f"FifoStats(tx={self.tx}, rx={self.rx})"
 
 
 class FifoNode:
@@ -49,208 +55,167 @@ class FifoNode:
                 self.fifoStats.rx[key] = []
             self.fifoStats.rx[key].append(msg)
 
-
     def procPeerTxServerMsg(self, stream, msg, status):
-
-        logging.debug(str(msg))
         dst = self.getDest(msg)
-        logging.debug("\tServer replying to: " + str(dst))
-        logging.debug(str(msg))
+        logger.debug("Server replying to: %s", dst)
         self.updateFifoStats(dst, msg, tx=True)
 
-
     def ackAgent(self, satisfy=False):
-
         prNodeStatus = self.prMod.getStatus()
-        prNodeStatusMsg = PRStatusUpdate.createStatusUpdate(MsgType.PR_STATUS_UPDATE,
-                                                           prNodeStatus[0],
-                                                           prNodeStatus[1],
-                                                           prNodeStatus[2],
-                                                           prNodeStatus[3],
-                                                           satisfy)
-        logging.debug("\t[PR-LOG] ACK-AGENT3")
-        logging.debug("\t[PR-LOG] Sending Status update to Agent (" + str(prNodeStatus[0]) + ")")
+        prNodeStatusMsg = PRStatusUpdate.createStatusUpdate(
+            MsgType.PR_STATUS_UPDATE,
+            prNodeStatus[0], prNodeStatus[1],
+            prNodeStatus[2], prNodeStatus[3],
+            satisfy)
+        logger.debug("[PR-LOG] Sending Status update to Agent (seq=%d)", prNodeStatus[0])
 
-        self.stupidVerificationSocket.send_multipart([self.name.encode(), prNodeStatusMsg])
-        updateAck = self.stupidVerificationSocket.recv_multipart()
-        logging.debug(str(updateAck))
+        self.sinkSocket.send_multipart([self.name.encode(), prNodeStatusMsg])
+        updateAck = self.sinkSocket.recv_multipart()
         updateAck = pickle.loads(updateAck[1])
-        logging.debug(str(updateAck))
-        assert prNodeStatus[0] == updateAck[PRStatusUpdate.SEQ]
-
-        logging.debug("AfterQueue")
-        logging.debug("Update ACK \t" + str(updateAck))
-        logging.debug("PrNodeStatus \t" + str(prNodeStatus))
-
+        if prNodeStatus[0] != updateAck[PRStatusUpdate.SEQ]:
+            raise RuntimeError(
+                f"Status ACK seq mismatch: expected {prNodeStatus[0]}, "
+                f"got {updateAck[PRStatusUpdate.SEQ]}")
 
     def procPeerRxPathReversalMsg(self, stream, rxMsg, sender, pureMsg):
-
-        logging.debug("\t[PR-LOG] Sending PR_ACK to:" + str(sender))
+        logger.debug("[PR-LOG] Sending PR_ACK to: %s", sender)
         ackMsg = MsgFactory.create(MsgType.PR_ACK, dst=sender)
         stream.send_multipart([self.name.encode(), ackMsg])
 
-
         if rxMsg[MsgType.DST] != self.name:
             if rxMsg[MsgType.TYPE] == MsgType.PR_REQ:
-                logging.debug("\t[PR-LOG] Forwarding PR_REQ to:" + self.neighbor)
+                logger.debug("[PR-LOG] Forwarding PR_REQ to: %s", self.neighbor)
             elif rxMsg[MsgType.TYPE] == MsgType.PR_OBJ:
-                logging.debug("\t[PR-LOG] Forwarding PR_OBJ to:" + self.neighbor)
+                logger.debug("[PR-LOG] Forwarding PR_OBJ to: %s", self.neighbor)
             self.peerCltStream.send_multipart([self.name.encode(), pureMsg])
 
         elif rxMsg[MsgType.DST] == self.name:
 
             if rxMsg[MsgType.TYPE] == MsgType.PR_REQ:
-
-                txMsg = None
-                logging.debug("\t[PR-LOG] PR_REQ reached DST")
+                logger.debug("[PR-LOG] PR_REQ reached DST")
                 action, actionArg = self.prMod.recv(self.name, rxMsg)
 
                 self.ackAgent()
 
                 if action == PRNext.FORWARD:
-                    logging.debug("\t[PR-LOG] New Request FWD to:" + actionArg)
+                    logger.debug("[PR-LOG] New Request FWD to: %s", actionArg)
                     txMsg = MsgFactory.create(MsgType.PR_REQ,
-                                          dst=actionArg,
-                                          src=rxMsg[MsgType.SOURCE])
+                                              dst=actionArg,
+                                              src=rxMsg[MsgType.SOURCE])
                     self.peerCltStream.send_multipart([self.name.encode(), txMsg])
 
                 elif action == PRNext.TX_OBJ:
-                    logging.debug("\t[PR-LOG] Serving OBJECT to:" + rxMsg[MsgType.SOURCE])
+                    logger.debug("[PR-LOG] Serving OBJECT to: %s", rxMsg[MsgType.SOURCE])
                     txMsg = MsgFactory.create(MsgType.PR_OBJ,
-                                          dst=rxMsg[MsgType.SOURCE],
-                                          data=actionArg,
-                                          src=self.name)
+                                              dst=rxMsg[MsgType.SOURCE],
+                                              data=actionArg,
+                                              src=self.name)
                     self.peerCltStream.send_multipart([self.name.encode(), txMsg])
 
                 elif action == PRNext.QUEUED:
-                    logging.debug("\t[PR-LOG] Request from " + rxMsg[MsgType.SOURCE] + " queued (node is hungry)")
-                    # Don't send any message — request is queued until we get the token
+                    logger.debug("[PR-LOG] Request from %s queued (node is hungry)",
+                                 rxMsg[MsgType.SOURCE])
 
             elif rxMsg[MsgType.TYPE] == MsgType.PR_OBJ:
-                logging.debug("\t[PR-LOG] Received OBJECT from:" + rxMsg[MsgType.SOURCE])
+                logger.debug("[PR-LOG] Received OBJECT from: %s", rxMsg[MsgType.SOURCE])
                 self.prMod.becomeEating(rxMsg[MsgType.DATA])
 
-                logging.debug("\t[PR-LOG] Inform the server about EATING")
+                logger.debug("[PR-LOG] Inform the server about EATING")
                 self.ackAgent(satisfy=True)
 
                 # If there are queued requests, serve them immediately
                 if self.prMod.request_queue:
                     forward_info = self.prMod.becomeThinking()
                     if forward_info is not None:
-                    next_node, data = forward_info
-                    logging.debug("\t[PR-LOG] Forwarding token to queued requester: " + next_node)
-                    self.ackAgent()
-                    txMsg = MsgFactory.create(MsgType.PR_OBJ,
-                                          dst=next_node,
-                                          data=data,
-                                          src=self.name)
-                    self.peerCltStream.send_multipart([self.name.encode(), txMsg])
-
+                        next_node, data = forward_info
+                        logger.debug("[PR-LOG] Forwarding token to queued requester: %s", next_node)
+                        self.ackAgent()
+                        txMsg = MsgFactory.create(MsgType.PR_OBJ,
+                                                  dst=next_node,
+                                                  data=data,
+                                                  src=self.name)
+                        self.peerCltStream.send_multipart([self.name.encode(), txMsg])
 
     def procPeerRxServerMsg(self, stream, msg):
-        logging.debug("\tReceived message...")
         rxMsg = pickle.loads(msg[1])
-        logging.debug("GENERIC:\t" + str(rxMsg))
 
-        if rxMsg[MsgType.TYPE] == MsgType.PR_REQ or \
-            rxMsg[MsgType.TYPE] == MsgType.PR_OBJ:
+        if rxMsg[MsgType.TYPE] in (MsgType.PR_REQ, MsgType.PR_OBJ):
             self.procPeerRxPathReversalMsg(stream, rxMsg, msg[0], msg[1])
 
-
         if rxMsg[MsgType.TYPE] == MsgType.KEEP_ALIVE:
-            logging.debug('\tReceived KEEP_ALIVE message from:\t' + str(msg[0]))
-            logging.debug('\tSending a KEEP_ALIVE_ACK message to:\t' + str(msg[0]))
+            logger.debug("Received KEEP_ALIVE from: %s", msg[0])
             msgOut = MsgFactory.create(MsgType.KEEP_ALIVE_ACK, msg[0])
             try:
                 stream.send_multipart([self.name.encode(), msgOut])
             except TypeError as e:
-                logging.debug(str(e))
+                logger.debug("Error sending KEEP_ALIVE_ACK: %s", e)
 
         if rxMsg[MsgType.TYPE] == MsgType.DATA_MSG:
             did = rxMsg[MsgType.DATA_ID]
-            logging.debug('\tReceived DATA_MSG message from:\t' + str(msg[0]) +
-                          " with id\t" + did)
+            logger.debug("Received DATA_MSG from %s with id %s", msg[0], did)
             msgOut = MsgFactory.create(MsgType.DATA_ACK, None, None, did, None)
-            logging.debug('\tSending DATA_ACK message to:\t' + str(msg[0]))
             stream.send_multipart([self.name.encode(), msgOut])
-
 
             if rxMsg[MsgType.DST] == self.name:
                 self.dataObject = deepcopy(rxMsg[MsgType.DATA])
                 self.dataObjectId = rxMsg[MsgType.DATA_ID]
-                logging.debug('\t[PR-LOG]DATA_MSG destination reached with id:' +
-                               str(self.dataObjectId))
-                logging.debug('\tSending DATA_ACK to Agent')
+                logger.debug("DATA_MSG destination reached with id: %s", self.dataObjectId)
                 msgOutDatAck = MsgFactory.create(MsgType.DATA_ACK, None, None, did, None)
                 self.streamCmdOut.send_multipart([self.name.encode(), msgOutDatAck])
-
             else:
-                logging.debug("\tIncoming DATA_MSG needs forwarding")
-                logging.debug("\tForwarding DATA_MSG(" + str(did) + ") to neighbor:\t" +
-                              str(self.neighbor))
+                logger.debug("Forwarding DATA_MSG(%s) to neighbor: %s", did, self.neighbor)
                 self.peerCltStream.send_multipart([self.name.encode(), msg[1]])
-
 
     def procPeerTxClientMsg(self, msg, status):
         randomWaitOnFifo = choice(range(3))
         sleep(randomWaitOnFifo)
         dst = self.getDest(msg)
-        logging.debug("Client sending: " + str(msg))
+        logger.debug("Client sending to: %s", dst)
         self.updateFifoStats(dst, msg, tx=True)
 
     def procPeerRxClientMsg(self, msg):
-
         if len(msg) > 1:
             rxMsg = pickle.loads(msg[1])
             self.updateFifoStats(msg[0], msg, rx=True)
 
             if rxMsg[MsgType.TYPE] == MsgType.KEEP_ALIVE_ACK:
-                logging.debug("\tReceived KEEP_ALIVE_ACK from:\t" + str(msg[0]))
-
+                logger.debug("Received KEEP_ALIVE_ACK from: %s", msg[0])
             if rxMsg[MsgType.TYPE] == MsgType.DATA_ACK:
-                logging.debug("\tReceived DATA_MSG_ACK from:\t" +
-                            str(msg[1]) + "\t for:\t" + str(rxMsg[MsgType.DATA_ID]))
-
+                logger.debug("Received DATA_MSG_ACK for: %s", rxMsg[MsgType.DATA_ID])
             if rxMsg[MsgType.TYPE] == MsgType.PR_ACK:
-                logging.debug("\t[PR-LOG] Received ACK for PR-REQ/PR_OBJ")
+                logger.debug("[PR-LOG] Received ACK for PR-REQ/PR_OBJ")
 
     def ackOrForward(self, msgIn, caseExisting=False, caseNACK=False):
-
         did = msgIn[MsgType.DATA_ID]
         if msgIn[MsgType.DST] == self.name or caseNACK:
             if not caseNACK:
                 msgOut = MsgFactory.create(MsgType.DATA_ACK, dataId=did)
-                logging.debug("\tObject\t" + str(did) + " is home. Sending ACK to the agent")
+                logger.debug("Object %s is home. Sending ACK to agent", did)
             else:
                 msgOut = MsgFactory.create(MsgType.DATA_NACK, dataId=did)
-                logging.debug("\t Object\t" + str(did) + " is NOT home. Sending NACK to the agent")
+                logger.debug("Object %s is NOT home. Sending NACK to agent", did)
 
             self.streamCmdOut.send_multipart([self.name.encode(), msgOut])
             self.streamCmdOut.flush()
-
-
         else:
             if caseExisting:
                 msgIn[MsgType.TYPE] = MsgType.DATA_MSG
 
             msgOut = [self.name.encode(), pickle.dumps(msgIn)]
-            logging.debug("\tIncoming DATA_MSG needs forwarding")
-            logging.debug("\tForwarding DATA_MSG(" + str(did) + ") to neighbor:\t" +
-                          str(self.neighbor))
+            logger.debug("Forwarding DATA_MSG(%s) to neighbor: %s", did, self.neighbor)
             self.peerSockClt.send_multipart(msgOut)
-
 
     def procAgentCmd(self, stream, msg):
         # Decode bytes frames to strings for comparison
         msg = [m.decode() if isinstance(m, bytes) else m for m in msg]
 
         if msg[0] == 'Exit':
-            logging.debug("Received exit")
+            logger.debug("Received exit")
             stream.stop_on_recv()
             self.nodeIloop.stop()
 
         if msg[0] == 'ConnectToNeighbor':
-            logging.debug("\tConnectingToNeighbor  CMD arrived")
+            logger.debug("ConnectingToNeighbor CMD arrived")
             self.peerSockClt = self.context.socket(zmq.REQ)
             self.peerSockClt.connect(self.neighborAddr)
             self.peerCltStream = zmqstream.ZMQStream(self.peerSockClt)
@@ -258,81 +223,79 @@ class FifoNode:
             self.peerCltStream.on_send(self.procPeerTxClientMsg)
 
         if msg[0] == 'TestConnectionToNeighbor':
-            logging.debug('\tTestConnection With the Peer-Neighbor')
-            msgOut = MsgFactory.create(MsgType.KEEP_ALIVE,
-                                       self.neighbor)
+            logger.debug("TestConnection With the Peer-Neighbor")
+            msgOut = MsgFactory.create(MsgType.KEEP_ALIVE, self.neighbor)
             self.peerSockClt.send_multipart([self.name.encode(), msgOut])
 
         if msg[0] == 'Reset':
-            logging.debug('\tServer send RESET message')
+            logger.debug("Server send RESET message")
             self.prMod.reset()
 
         if msg[0] == 'Echo':
-            logging.debug("\t Server sends echo message: " + (str(msg[1])))
+            logger.debug("Server sends echo message: %s", msg[1] if len(msg) > 1 else "")
 
         if msg[0] == 'Set':
-            logging.debug('\tServer send SET message')
-            rxMsg = pickle.loads(msg[1] if isinstance(msg[1], bytes) else msg[1].encode())
+            logger.debug("Server send SET message")
+            payload = msg[1] if isinstance(msg[1], bytes) else msg[1].encode()
+            rxMsg = pickle.loads(payload)
             itemHolder = rxMsg[MsgType.DST]
             item = None
             if itemHolder == self.name:
-                logging.debug("\tInitial object holder from Server's SET")
+                logger.debug("Initial object holder from Server's SET")
                 item = rxMsg[MsgType.DATA]
 
             if self.prMod is None:
-                self.prMod = PathReversal(itemHolder, item, logging)
+                self.prMod = PathReversal(itemHolder, item, logger)
             else:
-                self.prMod.set(itemHolder, item, logging)
+                self.prMod.set(itemHolder, item, logger)
 
         if len(msg) > 1:
             payload = msg[1] if isinstance(msg[1], bytes) else msg[1].encode()
             rxMsg = pickle.loads(payload)
 
             if rxMsg[MsgType.TYPE] == MsgType.AGENT_TEST_MSG:
-                logging.debug('\tReceived Test from Agent')
-                msgOut = MsgFactory.create(MsgType.AGENT_TETS_ACK)
-                self.streamCmdOut.send_multipart([self.name.encode(), msgOut], callback=self.cmdOutRequestToSink)
+                logger.debug("Received Test from Agent")
+                msgOut = MsgFactory.create(MsgType.AGENT_TEST_ACK)
+                self.streamCmdOut.send_multipart(
+                    [self.name.encode(), msgOut],
+                    callback=self.cmdOutRequestToSink)
 
             elif rxMsg[MsgType.TYPE] == MsgType.DATA_MOVE_MSG:
-                logging.debug("Received DATA_MOVE_MSG request")
+                logger.debug("Received DATA_MOVE_MSG request")
                 if self.dataObjectId == rxMsg[MsgType.DATA_ID]:
                     self.ackOrForward(rxMsg, caseExisting=True)
                 else:
                     self.ackOrForward(rxMsg, caseExisting=True, caseNACK=True)
 
             elif rxMsg[MsgType.TYPE] == MsgType.DATA_MSG:
-                logging.debug('\t[PR-LOG]Received Data Message from Agent with ID:\t' +
-                              str(rxMsg[MsgType.DATA_ID]))
+                logger.debug("Received Data Message from Agent with ID: %s",
+                             rxMsg[MsgType.DATA_ID])
                 self.ackOrForward(rxMsg, caseExisting=False)
 
             elif rxMsg[MsgType.TYPE] == MsgType.FIFO_STATS_QUERY:
-                logging.debug("\tReceived FIFO-query-stats message from agent")
-                self.streamCmdOut.send_multipart([self.name.encode(), pickle.dumps(self.fifoStats)])
+                logger.debug("Received FIFO-query-stats message from agent")
+                self.streamCmdOut.send_multipart(
+                    [self.name.encode(), pickle.dumps(self.fifoStats)])
 
             elif rxMsg[MsgType.TYPE] == MsgType.PR_GET_HUNGRY:
-                logging.debug("\tReceived Message from server to get hungry")
+                logger.debug("Received Message from server to get hungry")
                 txMsg, toWhom = self.prMod.becomeHungry(self.name)
                 self.ackAgent()
                 if txMsg is not False:
-                    logging.debug("\t[PR-LOG] Sending PR-Request to: " + toWhom)
+                    logger.debug("[PR-LOG] Sending PR-Request to: %s", toWhom)
                     self.peerCltStream.send_multipart([self.name.encode(), txMsg])
 
             elif rxMsg[MsgType.TYPE] == MsgType.PR_STATUS_ACK:
-                logging.debug("======Incoming status ACK")
-                print("======Incoming status ACK")
+                logger.debug("Incoming status ACK")
                 self.statusQueue.put(rxMsg)
 
-
-        return
-
     def cmdOutRequestToSink(self, msg, status):
-        logging.debug("[RequestToSink]\t" + str(msg))
+        logger.debug("[RequestToSink] %s", msg)
 
     def cmdOutReplyFromSink(self, msg):
-        logging.debug("[ReplyFromSink]\t" + str(msg))
+        logger.debug("[ReplyFromSink] %s", msg)
 
     def runFifoNetWorker(self, netName, pubAgentAddr, sinkAgentAddr, neighbor):
-
         self.dataObject = None
         self.dataObjectId = None
         ioloop.install()
@@ -353,7 +316,7 @@ class FifoNode:
         self.neighborAddr = "tcp://" + neighbor
         self.neighbor = neighbor
 
-        logging.debug("\tCreating SubAgent socket")
+        logger.debug("Creating SubAgent socket")
         self.context = zmq.Context()
         self.cmdSubSock = self.context.socket(zmq.SUB)
         self.cmdSubSock.setsockopt(zmq.SUBSCRIBE, netName.encode())
@@ -368,18 +331,16 @@ class FifoNode:
         self.streamCmdIn = zmqstream.ZMQStream(self.cmdSubSock)
         self.streamCmdIn.on_recv_stream(self.procAgentCmd)
 
+        logger.debug("Creating REQ-to-Agent socket")
+        # Single REQ socket for all driver communication
+        self.sinkSocket = self.context.socket(zmq.REQ)
+        self.sinkSocket.connect(self.sinkAgent)
 
-        logging.debug("\tCreating PUSH-to-Agent socket")
-        self.cmdReqRepSock = self.context.socket(zmq.REQ)
-        self.cmdReqRepSock.connect(self.sinkAgent)
-        self.streamCmdOut = zmqstream.ZMQStream(self.cmdReqRepSock)
+        # ZMQStream wrapper for async sends
+        self.streamCmdOut = zmqstream.ZMQStream(self.sinkSocket)
         self.streamCmdOut.on_send(self.cmdOutRequestToSink)
 
-        self.stupidVerificationSocket = self.context.socket(zmq.REQ)
-        self.stupidVerificationSocket.connect(self.sinkAgent)
-
-
-        logging.debug("\tCreating Local Server socket")
+        logger.debug("Creating Local Server socket")
         self.peerSockServ = self.context.socket(zmq.REP)
         localbindAddr = "tcp://*:" + netName.split(':')[1]
         self.peerSockServ.bind(localbindAddr)
@@ -387,14 +348,11 @@ class FifoNode:
         self.peerServStream.on_recv_stream(self.procPeerRxServerMsg)
         self.peerServStream.on_send_stream(self.procPeerTxServerMsg)
 
-
         self.nodeIloop.start()
 
+
 def main():
-    #netName, pubAgentAddr, sinkAgentAddr, neighbor
-
     p = argparse.ArgumentParser(description="FifoNode Stand-alone")
-
     p.add_argument("-n", dest="netName", action="store", default=None,
                    help="Network name for the fifo-node")
     p.add_argument("-p", dest="pubAgentAddr", action="store", default=None,

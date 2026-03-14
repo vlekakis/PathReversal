@@ -16,8 +16,8 @@ class AgentSinkServer(threading.Thread):
     def run(self):
         while not self.stopRequest.is_set():
             msgIn = self.sinkSock.recv_multipart()
-            self.writeQueue.put(msgIn,False)
-            
+            self.writeQueue.put(msgIn, False)
+
             msgOut = self.readQueue.get(True)
             self.readQueue.task_done()
             self.sinkSock.send_multipart(msgOut)
